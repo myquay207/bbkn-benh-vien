@@ -283,6 +283,7 @@ def build_xnt(tmpl_bytes, companies):
     cs={c:gs(ws,12,c) for c in range(1,15)}
     ds={c:gs(ws,13,c) for c in range(1,15)}
 
+    # Tìm dòng Tổng cộng gốc trong template -> XÓA đi để tránh duplicate
     fs=None
     for row in ws.iter_rows():
         for cell in row:
@@ -290,9 +291,12 @@ def build_xnt(tmpl_bytes, companies):
         if fs: break
     if not fs: fs=279
 
+    ws.delete_rows(fs, 1)   # xóa dòng Tổng cộng gốc của template
+
     DS=12
     need=sum(1+len(d) for _,d in companies)+1
-    ins=(DS+need-1)-fs+1
+    data_end=DS+need-1
+    ins=data_end-fs+1
     if ins>0: ws.insert_rows(fs,ins); fs+=ins
 
     for m in [str(mr) for mr in ws.merged_cells.ranges if DS<=mr.min_row<fs]:
@@ -353,6 +357,17 @@ def build_xnt(tmpl_bytes, companies):
     cm.alignment=Alignment(horizontal='right',vertical='center')
     cm.number_format='#,##0'; cm.border=b_med()
     ws.row_dimensions[tr].height=20
+
+    # Fix footer: căn giữa chức vụ và tên ký, bỏ wrap text để không xuống dòng
+    footer_start_row = tr + 1
+    for r in range(footer_start_row, ws.max_row+1):
+        for col in range(1,15):
+            cl = ws.cell(row=r, column=col)
+            if cl.value and isinstance(cl.value, str):
+                cl.alignment = Alignment(horizontal='center', vertical='center',
+                                         wrap_text=False)
+                cl.font = Font(name='Times New Roman', size=11)
+        ws.row_dimensions[r].height = 20
 
     for col in range(1,15):
         for r in range(9,12):
