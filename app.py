@@ -346,28 +346,34 @@ def build_xnt(tmpl_bytes, companies):
         for i,dr in enumerate(drugs,1): wdr(cr,i,dr); drn.append(cr); cr+=1
 
     tr=cr
+    # Tính tổng thành tiền = H*L trực tiếp (tránh lỗi #N/A của SUM formula)
+    total_val = sum(
+        ws.cell(row=r,column=8).value * ws.cell(row=r,column=12).value
+        for r in drn
+        if isinstance(ws.cell(row=r,column=8).value,(int,float))
+        and isinstance(ws.cell(row=r,column=12).value,(int,float))
+    )
     lbl=ws.cell(row=tr,column=1,value='Tổng cộng')
     lbl.font=Font(name='Times New Roman',bold=True,size=11)
     lbl.alignment=Alignment(horizontal='left',vertical='center'); lbl.border=b_med()
     for c in range(2,13):
         try: ws.cell(row=tr,column=c).border=b_med()
         except: pass
-    cm=ws.cell(row=tr,column=13,value=f'=SUM({",".join(f"M{r}"for r in drn)})')
+    cm=ws.cell(row=tr,column=13,value=round(total_val))
     cm.font=Font(name='Times New Roman',bold=True,size=11)
     cm.alignment=Alignment(horizontal='right',vertical='center')
     cm.number_format='#,##0'; cm.border=b_med()
     ws.row_dimensions[tr].height=20
 
-    # Fix footer: căn giữa chức vụ và tên ký, bỏ wrap text để không xuống dòng
-    footer_start_row = tr + 1
-    for r in range(footer_start_row, ws.max_row+1):
+    # Footer: xóa khoảng trắng thừa, căn giữa, không wrap
+    for r in range(tr+1, ws.max_row+1):
+        ws.row_dimensions[r].height=22
         for col in range(1,15):
-            cl = ws.cell(row=r, column=col)
-            if cl.value and isinstance(cl.value, str):
-                cl.alignment = Alignment(horizontal='center', vertical='center',
-                                         wrap_text=False)
-                cl.font = Font(name='Times New Roman', size=11)
-        ws.row_dimensions[r].height = 20
+            cl=ws.cell(row=r,column=col)
+            if cl.value and isinstance(cl.value,str):
+                cl.value=cl.value.strip()
+                cl.alignment=Alignment(horizontal='center',vertical='center',wrap_text=False)
+                cl.font=Font(name='Times New Roman',size=11)
 
     for col in range(1,15):
         for r in range(9,12):
