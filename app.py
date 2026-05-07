@@ -1,7 +1,7 @@
 """
 HỆ THỐNG TỰ ĐỘNG HÓA BIÊN BẢN DƯỢC – Bệnh viện Đà Nẵng
 Hỗ trợ: BBKN · BBKK · XNT · Đối Chiếu Dược (XNT, Kiểm nhập, Kiểm kê)
-v7 – Thêm module Biên Bản Kiểm Kê (BBKK) + chọn tháng/năm báo cáo tự động
+v8 – Hỗ trợ upload .xls cho tất cả form + tự động phát hiện/căn chỉnh dòng lệch cột (fix Ramipril-type bug)
 """
 
 import io, math, copy, datetime, re, warnings
@@ -98,8 +98,18 @@ def is_drug_row(v0, col2):
     except: return False
     return not pd.isna(col2) and isinstance(col2, str) and not col2.strip().isdigit()
 
+def _find_name_col(row, expected=2):
+    """Nếu cột tên thuốc bị lệch, tìm cột string đầu tiên không phải số trong range [1..5]."""
+    for c in range(1, 6):
+        try:
+            v = row[c]
+        except: continue
+        if not pd.isna(v) and isinstance(v, str) and not str(v).strip().isdigit():
+            return c
+    return expected
+
 def parse_companies(raw_df, qty_col):
-    result, cur, rows, skipped = [], None, [], 0
+    result, cur, rows, skipped, shift_warnings = [], None, [], 0, []
     for _, row in raw_df.iterrows():
         v0 = row[0]
         if is_co_row(v0, row):
@@ -110,10 +120,31 @@ def parse_companies(raw_df, qty_col):
             except: qty = 0
             if qty != 0: rows.append(row)
             else: skipped += 1
+        else:
+            # Phát hiện dòng thuốc bị lệch cột (vd: Ramipril có merge cell ở cột trước)
+            try: int(str(v0).strip())
+            except: continue
+            name_col = _find_name_col(row, expected=2)
+            if name_col != 2 and not pd.isna(row[name_col]):
+                offset = name_col - 2
+                new_vals = {}
+                for c in row.index:
+                    src = c + offset
+                    try: new_vals[c] = row[src]
+                    except: new_vals[c] = float('nan')
+                new_vals[0] = row[0]
+                new_row = pd.Series(new_vals)
+                drug_name = str(new_row[2]).strip() if not pd.isna(new_row[2]) else str(v0)
+                shift_warnings.append(f"STT {v0}: '{drug_name}' phát hiện lệch {offset} cột → đã tự căn chỉnh")
+                try:    qty = float(new_row[qty_col]) if not pd.isna(new_row[qty_col]) else 0
+                except: qty = 0
+                if qty != 0: rows.append(new_row)
+                else: skipped += 1
     if cur and rows: result.append((cur, rows))
     return result, {'companies': len(result),
                     'drugs': sum(len(d) for _, d in result),
-                    'skipped': skipped}
+                    'skipped': skipped,
+                    'shift_warnings': shift_warnings}
 
 def gs(ws, r, c):
     cl = ws.cell(row=r, column=c)
@@ -1202,6 +1233,16 @@ with tab_bienban:
                     else:
                         raw_df=pd.read_excel(io.BytesIO(raw_b),sheet_name=0,header=None)
                     tpl_b = tpl_file_bbkn.read()
+                    # Nếu form chuẩn là .xls thì convert sang xlsx bytes
+                    if tpl_file_bbkn.name.endswith('.xls'):
+                        import xlrd, openpyxl as _oxl
+                        _xwb = xlrd.open_workbook(file_contents=tpl_b)
+                        _xws = _xwb.sheet_by_index(0)
+                        _nwb = _oxl.Workbook(); _nws = _nwb.active
+                        for _r in range(_xws.nrows):
+                            for _c in range(_xws.ncols):
+                                _nws.cell(row=_r+1,column=_c+1,value=_xws.cell_value(_r,_c))
+                        _tb=io.BytesIO(); _nwb.save(_tb); tpl_b=_tb.getvalue()
                     # Cập nhật tháng/năm trong form trước khi build
                     tpl_b = update_bbkn_dates(tpl_b, bbkn_thang, bbkn_nam)
                     companies, stats = parse_companies(raw_df, 9)
@@ -1233,6 +1274,12 @@ with tab_bienban:
             </div>""", unsafe_allow_html=True)
             st.download_button(label=f"⬇️ Tải File BBKN – {fname}", data=result, file_name=fname,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_bbkn")
+            sw = stats.get('shift_warnings', [])
+            if sw:
+                st.markdown(f"""<div class="warn-box">⚠️ <b>Phát hiện {len(sw)} dòng lệch cột trong file HPT – đã tự căn chỉnh:</b><br>
+                {'<br>'.join(f'• {w}' for w in sw)}<br><br>
+                <b>Vui lòng kiểm tra lại các dòng này trong file xuất ra.</b>
+                </div>""", unsafe_allow_html=True)
             st.markdown("""<div class="note">💡 <b>Khi in:</b> File đã thiết lập sẵn <b>A4 Ngang · Fit All Columns on One Page</b>.
             Mở Excel → Ctrl+P → in ngay.</div>""", unsafe_allow_html=True)
 
@@ -1253,7 +1300,7 @@ with tab_bienban:
 
         col1k, col2k = st.columns(2)
         with col1k: raw_file_bbkk = st.file_uploader("📂 File dữ liệu thô HPT (BBKK)", type=["xls","xlsx"], key="bbkk_raw")
-        with col2k: tpl_file_bbkk = st.file_uploader("📄 File form chuẩn Kiểm Kê", type=["xlsx"], key="bbkk_tpl")
+        with col2k: tpl_file_bbkk = st.file_uploader("📄 File form chuẩn Kiểm Kê", type=["xls","xlsx"], key="bbkk_tpl")
         st.markdown("<hr>", unsafe_allow_html=True)
 
         ready_bbkk = raw_file_bbkk is not None and tpl_file_bbkk is not None
@@ -1267,6 +1314,16 @@ with tab_bienban:
                     else:
                         raw_df_kk=pd.read_excel(io.BytesIO(raw_b_kk),sheet_name=0,header=None)
                     tpl_b_kk = tpl_file_bbkk.read()
+                    # Nếu form chuẩn là .xls thì convert sang xlsx bytes
+                    if tpl_file_bbkk.name.endswith('.xls'):
+                        import xlrd, openpyxl as _oxl2
+                        _xwb2 = xlrd.open_workbook(file_contents=tpl_b_kk)
+                        _xws2 = _xwb2.sheet_by_index(0)
+                        _nwb2 = _oxl2.Workbook(); _nws2 = _nwb2.active
+                        for _r2 in range(_xws2.nrows):
+                            for _c2 in range(_xws2.ncols):
+                                _nws2.cell(row=_r2+1,column=_c2+1,value=_xws2.cell_value(_r2,_c2))
+                        _tb2=io.BytesIO(); _nwb2.save(_tb2); tpl_b_kk=_tb2.getvalue()
                     drugs_kk, stats_kk = parse_bbkk_raw(raw_df_kk)
                     if not drugs_kk:
                         st.error("❌ Không tìm thấy dữ liệu hợp lệ. Kiểm tra lại file HPT.")
@@ -1317,16 +1374,32 @@ with tab_xnt_main:
             value=2026, key="xnt_nam")
 
     col1x, col2x = st.columns(2)
-    with col1x: raw_file_xnt = st.file_uploader("📂 File dữ liệu thô HPT (XNT)", type=["xlsx"], key="xnt_raw")
-    with col2x: tpl_file_xnt = st.file_uploader("📄 File form chuẩn XNT", type=["xlsx"], key="xnt_tpl")
+    with col1x: raw_file_xnt = st.file_uploader("📂 File dữ liệu thô HPT (XNT)", type=["xls","xlsx"], key="xnt_raw")
+    with col2x: tpl_file_xnt = st.file_uploader("📄 File form chuẩn XNT", type=["xls","xlsx"], key="xnt_tpl")
     st.markdown("<hr>", unsafe_allow_html=True)
 
     ready_xnt_main = raw_file_xnt is not None and tpl_file_xnt is not None
     if st.button("⚡ Bắt đầu xử lý XNT", disabled=not ready_xnt_main, key="btn_xnt_main"):
         with st.spinner("Đang xử lý XNT..."):
             try:
-                raw_df2 = pd.read_excel(io.BytesIO(raw_file_xnt.read()), sheet_name=0, header=None)
+                raw_b_xnt = raw_file_xnt.read()
+                if raw_file_xnt.name.endswith('.xls'):
+                    try:    raw_df2=pd.read_excel(io.BytesIO(raw_b_xnt),sheet_name=0,header=None,engine='xlrd')
+                    except: raw_df2=pd.read_excel(io.BytesIO(raw_b_xnt),sheet_name=0,header=None)
+                else:
+                    raw_df2=pd.read_excel(io.BytesIO(raw_b_xnt),sheet_name=0,header=None)
                 tpl_b2  = tpl_file_xnt.read()
+                # Nếu form chuẩn là .xls thì convert sang bytes bình thường (openpyxl sẽ lỗi với .xls)
+                if tpl_file_xnt.name.endswith('.xls'):
+                    import xlrd, openpyxl
+                    xls_wb = xlrd.open_workbook(file_contents=tpl_b2)
+                    xls_ws = xls_wb.sheet_by_index(0)
+                    new_wb = openpyxl.Workbook()
+                    new_ws = new_wb.active
+                    for r in range(xls_ws.nrows):
+                        for c in range(xls_ws.ncols):
+                            new_ws.cell(row=r+1, column=c+1, value=xls_ws.cell_value(r,c))
+                    tmp_buf = io.BytesIO(); new_wb.save(tmp_buf); tpl_b2 = tmp_buf.getvalue()
                 # Cập nhật tháng/năm trong form
                 tpl_b2 = update_xnt_dates(tpl_b2, xnt_thang, xnt_nam)
                 companies2, stats2 = parse_companies(raw_df2, 12)
