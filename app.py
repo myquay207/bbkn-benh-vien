@@ -1113,6 +1113,41 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
             )
             break
 
+    # ── Sửa thứ tự: chức vụ phải ở TRÊN, tên ở DƯỚI ──────────────────────────
+    # Quét các cột chữ ký trong footer (cols 1,2,4,6,8,10...)
+    # Mẫu đúng: hàng chức vụ (DS CKII, Lê Xuân Bình...) → hàng để trống → hàng tên
+    # Nếu phát hiện tên (họ tên đầy đủ kiểu "Ds. Xxx", "DS CKII Xxx") ở trên
+    # và chức vụ text ngắn hơn ở dưới thì hoán vị
+    def _looks_like_title(s):
+        """Chuỗi là chức vụ/chức danh: không có dấu chấm họ tên, thường là từ khóa"""
+        kws = ['Trưởng', 'Phòng', 'Thống kê', 'Thủ kho', 'Hội đồng', 'TCKT', 'Dược']
+        return any(k in s for k in kws)
+    def _looks_like_name(s):
+        """Chuỗi là tên người: có 'Ds.', 'DS', hoặc >= 2 từ viết hoa"""
+        if re.match(r'^(Ds\.|DS|Ths\.|PGS|GS)', s.strip()): return True
+        words = s.strip().split()
+        return len(words) >= 2 and sum(1 for w in words if w and w[0].isupper()) >= 2
+
+    footer_start = tr + 1
+    footer_end   = ws.max_row
+    # Duyệt từng cột footer quan trọng
+    for col in range(1, ws.max_column + 1):
+        col_vals = {}
+        for r in range(footer_start, footer_end + 1):
+            v = ws.cell(row=r, column=col).value
+            if v and isinstance(v, str) and v.strip():
+                col_vals[r] = v.strip()
+        if len(col_vals) < 2:
+            continue
+        rows_sorted = sorted(col_vals.keys())
+        # Lấy 2 dòng đầu tiên có nội dung
+        r1, r2 = rows_sorted[0], rows_sorted[1]
+        v1, v2 = col_vals[r1], col_vals[r2]
+        # Nếu dòng trên là tên người, dòng dưới là chức vụ → hoán đổi
+        if _looks_like_name(v1) and _looks_like_title(v2):
+            ws.cell(row=r1, column=col).value = v2
+            ws.cell(row=r2, column=col).value = v1
+
     for col, w in BBKK_W.items():
         ws.column_dimensions[get_column_letter(col)].width = w
     ws.page_setup.orientation = 'portrait'
@@ -1250,16 +1285,19 @@ with tab_bienban:
                         st.error("❌ Không tìm thấy dữ liệu hợp lệ. Kiểm tra lại file HPT.")
                         st.stop()
                     result = build_bbkn(tpl_b, companies)
-                    st.session_state.update(bbkn_result=result, bbkn_stats=stats,
-                                            bbkn_done=True, bbkn_thang=bbkn_thang, bbkn_nam=bbkn_nam)
+                    st.session_state['bbkn_result']    = result
+                    st.session_state['bbkn_stats']     = stats
+                    st.session_state['bbkn_done']      = True
+                    st.session_state['bbkn_thang_val'] = bbkn_thang
+                    st.session_state['bbkn_nam_val']   = bbkn_nam
                 except Exception as e:
                     st.error(f"❌ Lỗi: {e}"); st.exception(e)
 
         if st.session_state.get("bbkn_done"):
             stats  = st.session_state["bbkn_stats"]
             result = st.session_state["bbkn_result"]
-            _t = st.session_state.get("bbkn_thang", bbkn_thang)
-            _n = st.session_state.get("bbkn_nam", bbkn_nam)
+            _t = st.session_state.get("bbkn_thang_val", bbkn_thang)
+            _n = st.session_state.get("bbkn_nam_val",   bbkn_nam)
             fname  = f"BBKN_T{_t}_{_n}_HoanChinh.xlsx"
             st.markdown(f"""
             <div class="ok-box">
@@ -1329,16 +1367,19 @@ with tab_bienban:
                         st.error("❌ Không tìm thấy dữ liệu hợp lệ. Kiểm tra lại file HPT.")
                         st.stop()
                     result_kk = build_bbkk(tpl_b_kk, drugs_kk, bbkk_thang, bbkk_nam)
-                    st.session_state.update(bbkk_result=result_kk, bbkk_stats=stats_kk,
-                                            bbkk_done=True, bbkk_thang=bbkk_thang, bbkk_nam=bbkk_nam)
+                    st.session_state['bbkk_result'] = result_kk
+                    st.session_state['bbkk_stats']  = stats_kk
+                    st.session_state['bbkk_done']   = True
+                    st.session_state['bbkk_thang_val'] = bbkk_thang
+                    st.session_state['bbkk_nam_val']   = bbkk_nam
                 except Exception as e:
                     st.error(f"❌ Lỗi: {e}"); st.exception(e)
 
         if st.session_state.get("bbkk_done"):
             stats_kk2  = st.session_state["bbkk_stats"]
             result_kk2 = st.session_state["bbkk_result"]
-            _tk = st.session_state.get("bbkk_thang", bbkk_thang)
-            _nk = st.session_state.get("bbkk_nam", bbkk_nam)
+            _tk = st.session_state.get("bbkk_thang_val", bbkk_thang)
+            _nk = st.session_state.get("bbkk_nam_val",   bbkk_nam)
             fname_kk = f"BBKK_T{_tk}_{_nk}_HoanChinh.xlsx"
             st.markdown(f"""
             <div class="ok-box">
@@ -1406,16 +1447,19 @@ with tab_xnt_main:
                 if not companies2:
                     st.error("❌ Không tìm thấy dữ liệu hợp lệ."); st.stop()
                 result2 = build_xnt(tpl_b2, companies2)
-                st.session_state.update(xnt_main_result=result2, xnt_main_stats=stats2,
-                                        xnt_main_done=True, xnt_main_thang=xnt_thang, xnt_main_nam=xnt_nam)
+                st.session_state['xnt_main_result']    = result2
+                st.session_state['xnt_main_stats']     = stats2
+                st.session_state['xnt_main_done']      = True
+                st.session_state['xnt_main_thang_val'] = xnt_thang
+                st.session_state['xnt_main_nam_val']   = xnt_nam
             except Exception as e:
                 st.error(f"❌ Lỗi: {e}"); st.exception(e)
 
     if st.session_state.get("xnt_main_done"):
         stats2  = st.session_state["xnt_main_stats"]
         result2 = st.session_state["xnt_main_result"]
-        _tx = st.session_state.get("xnt_main_thang", xnt_thang)
-        _nx = st.session_state.get("xnt_main_nam", xnt_nam)
+        _tx = st.session_state.get("xnt_main_thang_val", xnt_thang)
+        _nx = st.session_state.get("xnt_main_nam_val",   xnt_nam)
         fname2  = f"XNT_T{_tx}_{_nx}_HoanChinh.xlsx"
         st.markdown(f"""
         <div class="ok-box">
