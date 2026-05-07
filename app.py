@@ -1,5 +1,5 @@
 """
-HỆ THỐNG TỰ ĐỘNG HÓA BÁO BÁO DƯỢC – Bệnh viện Đà Nẵng
+HỆ THỐNG TỰ ĐỘNG HÓA BIÊN BẢN DƯỢC – Bệnh viện Đà Nẵng
 Hỗ trợ: BBKN · BBKK · XNT · Đối Chiếu Dược (XNT, Kiểm nhập, Kiểm kê)
 v7 – Thêm module Biên Bản Kiểm Kê (BBKK) + chọn tháng/năm báo cáo tự động
 """
