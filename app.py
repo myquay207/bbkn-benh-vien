@@ -236,9 +236,21 @@ def build_bbkn(tmpl_bytes, companies):
         cl12=ws.cell(row=rn,column=12,value=''); ap(cl12,ds[12])
 
     cr = DS; drn = []
+    debug_rows = []  # Thu thập dòng bất thường để hiển thị
     for name,drugs in companies:
         wco(cr,name); cr+=1
-        for i,dr in enumerate(drugs,1): wdr(cr,i,dr); drn.append(cr); cr+=1
+        for i,dr in enumerate(drugs,1):
+            # Kiểm tra dòng bất thường: SL nhập (dr[8]) trống nhưng đơn giá (dr[9]) có
+            sl = dr[8] if not pd.isna(dr[8]) else None
+            dg = dr[9] if not pd.isna(dr[9]) else None
+            if sl is None and dg is not None:
+                debug_rows.append({
+                    'ten': str(dr[2]).strip() if not pd.isna(dr[2]) else '?',
+                    'nd':  str(dr[3]).strip() if not pd.isna(dr[3]) else '',
+                    'sl_raw': [f"col{j}={dr[j]}" for j in range(6,12)
+                               if j < len(dr.index) and not pd.isna(dr[j])]
+                })
+            wdr(cr,i,dr); drn.append(cr); cr+=1
 
     tr = cr
     lbl=ws.cell(row=tr,column=1,value='Tổng cộng: ')
@@ -291,7 +303,7 @@ def build_bbkn(tmpl_bytes, companies):
         setattr(ws.page_margins,a,v)
     ws.print_title_rows='1:14'; ws.freeze_panes=ws.cell(row=DS,column=1)
 
-    out=io.BytesIO(); wb.save(out); out.seek(0); return out.getvalue()
+    out=io.BytesIO(); wb.save(out); out.seek(0); return out.getvalue(), debug_rows
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1013,26 +1025,34 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
     if first_data_row:
         ds = {c: gs(ws, first_data_row, c) for c in range(1, 12)}
 
-    # ── Tìm vị trí "Tổng khoản" để insert rows ──────────────────────────────
-    fs = None
+    # ── Tìm TẤT CẢ vị trí "Tổng khoản" → dùng dòng CUỐI CÙNG, xóa các dòng cũ ──
+    tk_rows = []
     for row in ws.iter_rows():
         for cell in row:
             if cell.value and 'Tổng khoản' in str(cell.value):
-                fs = cell.row; break
-        if fs: break
-    if not fs: fs = DS + 185  # fallback
+                tk_rows.append(cell.row)
+    # Dùng dòng Tổng khoản cuối cùng làm mốc (đó là dòng template gốc đúng)
+    if tk_rows:
+        fs = max(tk_rows)
+        # Xóa nội dung tất cả các dòng Tổng khoản cũ khác (ngoài dòng cuối)
+        for old_tk in tk_rows:
+            for c in range(1, 12):
+                try: ws.cell(row=old_tk, column=c).value = None
+                except: pass
+    else:
+        fs = DS + 185  # fallback
 
-    # Xóa dữ liệu cũ từ DS đến fs-1
-    for m in [str(mr) for mr in ws.merged_cells.ranges if DS <= mr.min_row < fs]:
+    # Xóa dữ liệu cũ từ DS đến fs (bao gồm cả dòng Tổng khoản cuối cùng)
+    for m in [str(mr) for mr in ws.merged_cells.ranges if DS <= mr.min_row <= fs]:
         ws.merged_cells.remove(m)
-    for r in range(DS, fs):
+    for r in range(DS, fs + 1):
         for c in range(1, 12):
             try: ws.cell(row=r, column=c).value = None
             except: pass
 
     # ── Insert rows nếu cần ─────────────────────────────────────────────────
     need = len(drugs) + 1  # +1 cho dòng Tổng khoản
-    current_space = fs - DS
+    current_space = fs - DS  # số dòng data hiện có (không tính dòng Tổng khoản)
     if need > current_space:
         ins = need - current_space
         ws.insert_rows(fs, ins)
@@ -1042,11 +1062,10 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
     def wdr_kk(rn, stt, dr):
         ten = str(dr[1]).strip() if not pd.isna(dr[1]) else ''
         nd  = str(dr[2]).strip() if not pd.isna(dr[2]) else ''
-        # Ghép tên + nồng độ vào cột 2 (như template gốc)
-        ten_full = f"{ten} {nd}".strip() if nd else ten
+        # Cột 2: chỉ tên thuốc (KHÔNG ghép nồng độ — nồng độ đã có cột 3 riêng)
         cols = [
             (1,  stt,                                               'center', False, None),
-            (2,  ten_full,                                          'left',   True,  None),
+            (2,  ten,                                               'left',   True,  None),
             (3,  nd,                                                'left',   False, None),
             (4,  str(dr[3]).strip() if not pd.isna(dr[3]) else '',  'center', False, None),
             (5,  str(dr[5]).strip() if not pd.isna(dr[5]) else '',  'center', False, None),
@@ -1254,7 +1273,7 @@ with tab_bienban:
 
         col1, col2 = st.columns(2)
         with col1: raw_file_bbkn = st.file_uploader("📂 File dữ liệu thô HPT (BBKN)", type=["xls","xlsx"], key="bbkn_raw")
-        with col2: tpl_file_bbkn = st.file_uploader("📄 File form chuẩn Kiểm Nhập", type=["xlsx"], key="bbkn_tpl")
+        with col2: tpl_file_bbkn = st.file_uploader("📄 File form chuẩn Kiểm Nhập", type=["xls","xlsx"], key="bbkn_tpl")
         st.markdown("<hr>", unsafe_allow_html=True)
 
         ready_bbkn = raw_file_bbkn is not None and tpl_file_bbkn is not None
@@ -1284,12 +1303,13 @@ with tab_bienban:
                     if not companies:
                         st.error("❌ Không tìm thấy dữ liệu hợp lệ. Kiểm tra lại file HPT.")
                         st.stop()
-                    result = build_bbkn(tpl_b, companies)
-                    st.session_state['bbkn_result']    = result
-                    st.session_state['bbkn_stats']     = stats
-                    st.session_state['bbkn_done']      = True
-                    st.session_state['bbkn_thang_val'] = bbkn_thang
-                    st.session_state['bbkn_nam_val']   = bbkn_nam
+                    result, debug_rows_bbkn = build_bbkn(tpl_b, companies)
+                    st.session_state['bbkn_result']      = result
+                    st.session_state['bbkn_stats']       = stats
+                    st.session_state['bbkn_done']        = True
+                    st.session_state['bbkn_thang_val']   = bbkn_thang
+                    st.session_state['bbkn_nam_val']     = bbkn_nam
+                    st.session_state['bbkn_debug_rows']  = debug_rows_bbkn
                 except Exception as e:
                     st.error(f"❌ Lỗi: {e}"); st.exception(e)
 
@@ -1317,6 +1337,12 @@ with tab_bienban:
                 st.markdown(f"""<div class="warn-box">⚠️ <b>Phát hiện {len(sw)} dòng lệch cột trong file HPT – đã tự căn chỉnh:</b><br>
                 {'<br>'.join(f'• {w}' for w in sw)}<br><br>
                 <b>Vui lòng kiểm tra lại các dòng này trong file xuất ra.</b>
+                </div>""", unsafe_allow_html=True)
+            dbg = st.session_state.get('bbkn_debug_rows', [])
+            if dbg:
+                st.markdown(f"""<div class="warn-box">⚠️ <b>Phát hiện {len(dbg)} dòng thiếu SL nhập (cột 9 trống) trong file HPT:</b><br>
+                {'<br>'.join(f'• <b>{d["ten"]}</b> {d["nd"]} — dữ liệu thô: {", ".join(d["sl_raw"])}' for d in dbg)}<br><br>
+                <b>Kiểm tra lại HPT: các dòng này có thể bị lệch cột hoặc HPT không xuất SL nhập.</b>
                 </div>""", unsafe_allow_html=True)
             st.markdown("""<div class="note">💡 <b>Khi in:</b> File đã thiết lập sẵn <b>A4 Ngang · Fit All Columns on One Page</b>.
             Mở Excel → Ctrl+P → in ngay.</div>""", unsafe_allow_html=True)
