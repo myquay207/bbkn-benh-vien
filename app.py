@@ -1,12 +1,13 @@
 """
 HỆ THỐNG TỰ ĐỘNG HÓA BIÊN BẢN DƯỢC – Bệnh viện Đà Nẵng
-Hỗ trợ: Biên Bản Kiểm Nhập (BBKN) & Báo Cáo Xuất Nhập Tồn (XNT)
+Hỗ trợ: BBKN · XNT · Đối Chiếu Dược (XNT, Kiểm nhập, Kiểm kê)
+v6 – Gộp chung 1 app
 """
 
-import io, math, copy, datetime, warnings
+import io, math, copy, datetime, re, warnings
 import streamlit as st
 import pandas as pd
-from openpyxl import load_workbook
+from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -34,6 +35,7 @@ html,body,[class*="css"]{font-family:'Be Vietnam Pro',sans-serif;}
 .tab-desc{background:#eff6ff;border-left:4px solid #2563a8;border-radius:0 10px 10px 0;
   padding:12px 16px;margin:12px 0 18px;font-size:.86rem;color:#1e3a5f;line-height:1.6;}
 .stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:16px 0;}
+.stat-grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0;}
 .stat-card{background:white;border:1px solid #e2e8f0;border-radius:12px;
   padding:16px 12px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.06);}
 .stat-card .num{font-size:1.7rem;font-weight:700;color:#1a3a5c;line-height:1;}
@@ -44,6 +46,16 @@ html,body,[class*="css"]{font-family:'Be Vietnam Pro',sans-serif;}
 .ok-box p{color:#15803d;font-size:.84rem;margin:0;}
 .note{background:#fff7ed;border-left:4px solid #f59e0b;border-radius:0 10px 10px 0;
   padding:10px 14px;font-size:.82rem;color:#92400e;margin-top:14px;line-height:1.6;}
+.warn-box{background:#fff7ed;border-left:4px solid #f59e0b;border-radius:0 10px 10px 0;
+  padding:11px 15px;margin:10px 0;font-size:.84rem;color:#92400e;line-height:1.6;}
+.info-box{background:#eff6ff;border-left:4px solid #2563a8;border-radius:0 10px 10px 0;
+  padding:11px 15px;margin:10px 0 16px;font-size:.85rem;color:#1e3a5f;line-height:1.7;}
+.map-box{background:#f0fdf4;border:1.5px solid #86efac;border-radius:10px;
+  padding:10px 16px;margin:10px 0;font-size:.85rem;color:#166534;}
+.upload-section{background:#f8faff;border:1.5px solid #c7d9f5;border-radius:14px;
+  padding:18px 20px;margin-bottom:18px;}
+.upload-section h4{color:#1a3a5c;font-size:.82rem;font-weight:700;letter-spacing:1.2px;
+  text-transform:uppercase;margin:0 0 14px;}
 .stButton>button{background:linear-gradient(135deg,#1a3a5c,#2563a8)!important;
   color:white!important;font-weight:600!important;font-size:.95rem!important;
   border:none!important;border-radius:10px!important;padding:13px 0!important;
@@ -59,8 +71,9 @@ hr{border:none;border-top:1px solid #e2e8f0;margin:20px 0;}
 </style>
 """, unsafe_allow_html=True)
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-#  SHARED HELPERS
+#  SHARED HELPERS (dùng chung BBKN + XNT)
 # ══════════════════════════════════════════════════════════════════════════════
 SKIP_KW = ['Tổng cộng','Hội đồng','Trưởng','Trang','Đã kiểm nhập',
            'Ông/bà','kiểm nhập những','Trang 1']
@@ -253,12 +266,6 @@ def build_bbkn(tmpl_bytes, companies):
 # ══════════════════════════════════════════════════════════════════════════════
 #  MODULE XNT
 # ══════════════════════════════════════════════════════════════════════════════
-# Template XNT cols: A=STT,B=Tên thuốc,C=Nồng độ,D=ĐVT,E=Số lô,F=Nơi SX,
-#                    G=Hạn dùng,H=Đơn giá,I=Tồn đầu,J=Tổng nhập,K=Thực xuất,
-#                    L=Tồn cuối,M=Thành tiền,N=Ghi chú
-# Raw XNT cols idx: 0=STT,1=?,2=Tên,3=Nồng độ,4=ĐVT,5=Số lô,6=Nơi SX,
-#                   7=Hạn dùng,8=Đơn giá,9=Tồn đầu,10=Nhập,11=Xuất,12=Tồn cuối,13=Thành tiền
-
 XNT_W = {1:5,2:28,3:16,4:7,5:10,6:30,7:11,8:12,9:9,10:9,11:9,12:9,13:14,14:8}
 XNT_A = {1:('center','center'),2:('left','center'),3:('left','center'),
          4:('center','center'),5:('center','center'),6:('left','center'),
@@ -283,7 +290,6 @@ def build_xnt(tmpl_bytes, companies):
     cs={c:gs(ws,12,c) for c in range(1,15)}
     ds={c:gs(ws,13,c) for c in range(1,15)}
 
-    # Tìm dòng Tổng cộng gốc trong template -> XÓA đi để tránh duplicate
     fs=None
     for row in ws.iter_rows():
         for cell in row:
@@ -291,7 +297,7 @@ def build_xnt(tmpl_bytes, companies):
         if fs: break
     if not fs: fs=279
 
-    ws.delete_rows(fs, 1)   # xóa dòng Tổng cộng gốc của template
+    ws.delete_rows(fs, 1)
 
     DS=12
     need=sum(1+len(d) for _,d in companies)+1
@@ -346,7 +352,6 @@ def build_xnt(tmpl_bytes, companies):
         for i,dr in enumerate(drugs,1): wdr(cr,i,dr); drn.append(cr); cr+=1
 
     tr=cr
-    # Tính tổng thành tiền = H*L trực tiếp (tránh lỗi #N/A của SUM formula)
     total_val = sum(
         ws.cell(row=r,column=8).value * ws.cell(row=r,column=12).value
         for r in drn
@@ -365,7 +370,6 @@ def build_xnt(tmpl_bytes, companies):
     cm.number_format='#,##0'; cm.border=b_med()
     ws.row_dimensions[tr].height=20
 
-    # Footer: xóa khoảng trắng thừa, căn giữa, không wrap
     for r in range(tr+1, ws.max_row+1):
         ws.row_dimensions[r].height=22
         for col in range(1,15):
@@ -416,100 +420,843 @@ def build_xnt(tmpl_bytes, companies):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  GIAO DIỆN
+#  MODULE ĐỐI CHIẾU DƯỢC – toàn bộ logic từ app_doi_chieu_v5
+# ══════════════════════════════════════════════════════════════════════════════
+
+def dc_norm(s):
+    if not isinstance(s, str): return ""
+    s = s.strip().lower()
+    s = re.sub(r'_x000a_', ' ', s); s = re.sub(r'\n', ' ', s)
+    s = re.sub(r'[#]', '', s)
+    s = re.sub(r'(\d),(\d)', r'\1.\2', s)
+    s = re.sub(r'(\d)\s+(mg|ml|mcg|μg|g|iu|%|meq|l)', r'\1\2', s)
+    s = re.sub(r'\s*\+\s*', '+', s)
+    return re.sub(r'\s+', ' ', s).strip()
+
+def dc_is_drug(s):
+    if not isinstance(s, str): return False
+    s = s.strip()
+    if len(s) < 2: return False
+    try: float(s); return False
+    except: return True
+
+def dc_safe_float(v):
+    try: return float(v)
+    except: return 0.0
+
+def dc_parse_tk(df_raw):
+    rows = []
+    for _, row in df_raw.iloc[5:].iterrows():
+        ma  = str(row[4]).strip() if not pd.isna(row[4]) else ''
+        ten = str(row[5]).strip() if not pd.isna(row[5]) else ''
+        if not ma or not ten: continue
+        gia = dc_safe_float(row[11])
+        rows.append({
+            'ma': ma, 'ten_tk': ten,
+            'nd_tk':   str(row[8]).strip() if not pd.isna(row[8]) else '',
+            'gia_tk':  gia,
+            'nhap_tk': dc_safe_float(row[14]),
+            'ton_tk':  dc_safe_float(row[24]),
+            'kten': dc_norm(ten),
+            'knd':  dc_norm(str(row[8]) if not pd.isna(row[8]) else ''),
+            'kgia': int(round(gia)) if gia else 0,
+        })
+    return pd.DataFrame(rows).reset_index(drop=True) if rows else pd.DataFrame()
+
+def dc_extract_ma_map(dfs_nhap_xuat):
+    all_rows = []
+    for df in dfs_nhap_xuat:
+        if df is None or df.empty: continue
+        for _, row in df.iterrows():
+            try: int(str(row[0]).strip())
+            except: continue
+            if pd.isna(row[1]) or pd.isna(row[2]): continue
+            ten = str(row[2]).strip()
+            if not dc_is_drug(ten): continue
+            gia = dc_safe_float(row[5])
+            all_rows.append({
+                'ma': str(row[1]).strip(), 'ten': ten,
+                'nd': str(row[3]).strip() if not pd.isna(row[3]) else '',
+                'gia': gia,
+                'kten': dc_norm(ten),
+                'knd':  dc_norm(str(row[3]) if not pd.isna(row[3]) else ''),
+                'kgia': int(round(gia)) if gia else 0,
+            })
+    if not all_rows: return pd.DataFrame()
+    return (pd.DataFrame(all_rows)
+              .drop_duplicates(subset=['ma', 'kten', 'knd', 'kgia'])
+              .reset_index(drop=True))
+
+def dc_parse_raw_lines_bbkn(df_raw, sl_col=9):
+    rows = []
+    for _, row in df_raw.iterrows():
+        try: int(str(row[0]).strip())
+        except: continue
+        if pd.isna(row[2]): continue
+        ten = str(row[2]).strip()
+        if not dc_is_drug(ten): continue
+        nd    = str(row[3]).strip() if not pd.isna(row[3]) else ''
+        gia   = dc_safe_float(row[8])
+        sl    = dc_safe_float(row[sl_col])
+        ma_hd = str(row[1]).strip() if not pd.isna(row[1]) else ''
+        rows.append({'ten': ten, 'nd': nd, 'gia': gia, 'sl': sl, 'ma_hd': ma_hd,
+                     'kten': dc_norm(ten), 'knd': dc_norm(nd),
+                     'kgia': int(round(gia)) if gia else 0})
+    return pd.DataFrame(rows).reset_index(drop=True) if rows else pd.DataFrame()
+
+def dc_parse_raw_lines_bbkk(df_raw, sl_col=8):
+    rows = []
+    for _, row in df_raw.iterrows():
+        try: int(str(row[0]).strip())
+        except: continue
+        if pd.isna(row[1]): continue
+        ten = str(row[1]).strip()
+        if not dc_is_drug(ten): continue
+        nd  = str(row[2]).strip() if not pd.isna(row[2]) else ''
+        gia = dc_safe_float(row[4])
+        sl  = dc_safe_float(row[sl_col])
+        rows.append({'ten': ten, 'nd': nd, 'gia': gia, 'sl': sl, 'ma_hd': '',
+                     'kten': dc_norm(ten), 'knd': dc_norm(nd),
+                     'kgia': int(round(gia)) if gia else 0})
+    return pd.DataFrame(rows).reset_index(drop=True) if rows else pd.DataFrame()
+
+def dc_match_hpt_to_tk(df_hpt, df_tk, sl_col_tk):
+    results = []
+    used_tk_idx = set()
+
+    def is_active(tk_val):
+        return (sl_col_tk == 'nhap_tk' and tk_val > 0) or \
+               (sl_col_tk == 'ton_tk'  and abs(tk_val) >= 0.01)
+
+    for (kten, knd, kgia), grp_hpt in df_hpt.groupby(['kten', 'knd', 'kgia'], sort=False):
+        mask     = (df_tk['kten']==kten)&(df_tk['knd']==knd)&(df_tk['kgia']==kgia)
+        avail_tk = df_tk[mask & ~df_tk.index.isin(used_tk_idx)]
+        hpt_list = grp_hpt.reset_index(drop=True)
+        sl_sum   = hpt_list['sl'].sum()
+        hoa_don  = ', '.join([v for v in hpt_list['ma_hd'] if v])
+        ten0, nd0, gia0 = hpt_list.iloc[0]['ten'], hpt_list.iloc[0]['nd'], hpt_list.iloc[0]['gia']
+
+        def row_hpt_no_tk():
+            return {'ma': '', 'ten_hpt': ten0, 'nd': nd0, 'gia': gia0,
+                    'sl_hpt': sl_sum, 'hoa_don': hoa_don,
+                    'ten_tk': '', 'sl_tk': None, 'cl': None, 'status': 'hpt_no_tk'}
+
+        def row_matched(sl_hpt, hd, tr):
+            tk_val = tr[sl_col_tk]
+            return {'ma': tr['ma'], 'ten_hpt': ten0, 'nd': nd0, 'gia': gia0,
+                    'sl_hpt': sl_hpt, 'hoa_don': hd,
+                    'ten_tk': tr['ten_tk'], 'sl_tk': tk_val,
+                    'cl': sl_hpt - tk_val, 'status': 'matched'}
+
+        def row_tk_no_hpt(tr):
+            return {'ma': tr['ma'], 'ten_hpt': '', 'nd': tr['nd_tk'], 'gia': tr['gia_tk'],
+                    'sl_hpt': None, 'hoa_don': '',
+                    'ten_tk': tr['ten_tk'], 'sl_tk': tr[sl_col_tk],
+                    'cl': None, 'status': 'tk_no_hpt'}
+
+        if len(avail_tk) == 0:
+            results.append(row_hpt_no_tk()); continue
+
+        active_idx   = [i for i in avail_tk.index if is_active(avail_tk.loc[i, sl_col_tk])]
+        inactive_idx = [i for i in avail_tk.index if not is_active(avail_tk.loc[i, sl_col_tk])]
+
+        for i in inactive_idx:
+            used_tk_idx.add(i)
+
+        if len(active_idx) == 0:
+            results.append(row_hpt_no_tk()); continue
+
+        if len(active_idx) == 1:
+            ti = active_idx[0]
+            results.append(row_matched(sl_sum, hoa_don, df_tk.loc[ti]))
+            used_tk_idx.add(ti); continue
+
+        tk_pool = list(active_idx)
+        matched_tk = set(); matched_hpt = set()
+
+        for hi, hr in hpt_list.iterrows():
+            for ti in tk_pool:
+                if ti in matched_tk: continue
+                if abs(hr['sl'] - df_tk.loc[ti, sl_col_tk]) < 0.01:
+                    results.append(row_matched(hr['sl'], hr['ma_hd'], df_tk.loc[ti]))
+                    matched_tk.add(ti); matched_hpt.add(hi); used_tk_idx.add(ti); break
+
+        for hi, hr in hpt_list.iterrows():
+            if hi in matched_hpt: continue
+            best_ti, best_d = None, float('inf')
+            for ti in tk_pool:
+                if ti in matched_tk: continue
+                d = abs(hr['sl'] - df_tk.loc[ti, sl_col_tk])
+                if d < best_d: best_d, best_ti = d, ti
+            if best_ti is not None:
+                results.append(row_matched(hr['sl'], hr['ma_hd'], df_tk.loc[best_ti]))
+                matched_tk.add(best_ti); used_tk_idx.add(best_ti)
+            else:
+                results.append({'ma': '', 'ten_hpt': hr['ten'], 'nd': hr['nd'], 'gia': hr['gia'],
+                                 'sl_hpt': hr['sl'], 'hoa_don': hr['ma_hd'],
+                                 'ten_tk': '', 'sl_tk': None, 'cl': None, 'status': 'hpt_no_tk'})
+
+        for ti in tk_pool:
+            if ti not in matched_tk:
+                if is_active(df_tk.loc[ti, sl_col_tk]):
+                    results.append(row_tk_no_hpt(df_tk.loc[ti]))
+                used_tk_idx.add(ti)
+
+    for ti, tr in df_tk.iterrows():
+        if ti not in used_tk_idx and is_active(tr[sl_col_tk]):
+            results.append(row_tk_no_hpt(tr))
+
+    return pd.DataFrame(results)
+
+def dc_run_xnt(dfs_nx, df_xnt_raw, df_tk_raw):
+    global_map = dc_extract_ma_map(dfs_nx)
+    if global_map.empty:
+        return None, "Không đọc được dữ liệu từ file nhập/xuất"
+
+    aug = pd.DataFrame([{'ma': '0005301225', 'ten': 'Augmentin 1g', 'nd': '875mg + 125mg',
+                          'gia': 16680, 'kten': dc_norm('Augmentin 1g'),
+                          'knd': dc_norm('875mg + 125mg'), 'kgia': 16680}])
+    global_map = pd.concat([global_map, aug], ignore_index=True).drop_duplicates(
+        subset=['ma', 'kten', 'knd', 'kgia'])
+
+    xnt_rows = []
+    for _, row in df_xnt_raw.iterrows():
+        try: stt = int(str(row[0]).strip())
+        except: continue
+        if pd.isna(row[2]) or not isinstance(row[2], str): continue
+        if row[2].strip().isdigit(): continue
+        xnt_rows.append({
+            'stt': stt, 'ten': str(row[2]).strip(),
+            'nd':  str(row[3]).strip() if not pd.isna(row[3]) else '',
+            'gia': row[8] if not pd.isna(row[8]) else 0,
+            'ton_xnt': dc_safe_float(row[12]),
+            'kten': dc_norm(str(row[2])),
+            'knd':  dc_norm(str(row[3]) if not pd.isna(row[3]) else ''),
+            'kgia': int(round(float(row[8]))) if not pd.isna(row[8]) else 0,
+        })
+    df_xnt = pd.DataFrame(xnt_rows)
+    df_tk  = dc_parse_tk(df_tk_raw)
+
+    results = []; used_tk = set()
+
+    def make_row(xr, tr, method):
+        return {
+            'ma': tr['ma'] if tr is not None else '',
+            'ten': xr['ten'], 'nd': xr['nd'], 'gia': xr['gia'],
+            'ton_xnt': xr['ton_xnt'],
+            'ten_tk': tr['ten_tk'] if tr is not None else '',
+            'nd_tk':  tr['nd_tk']  if tr is not None else '',
+            'ton_tk': tr['ton_tk'] if tr is not None else None,
+            'method': method,
+            'cl': (xr['ton_xnt'] - tr['ton_tk']) if tr is not None else None,
+        }
+
+    for (kten, knd, kgia), grp_x in df_xnt.groupby(['kten', 'knd', 'kgia'], sort=False):
+        mask  = (df_tk['kten']==kten)&(df_tk['knd']==knd)&(df_tk['kgia']==kgia)
+        grp_t = df_tk[mask & ~df_tk.index.isin(used_tk)].copy()
+
+        if len(grp_x) == 1 and len(grp_t) == 1:
+            xr = grp_x.iloc[0]; tr = grp_t.iloc[0]
+            results.append(make_row(xr, tr, '1-1'))
+            used_tk.add(grp_t.index[0])
+        elif len(grp_x) >= 1 and len(grp_t) > 0:
+            xl = grp_x.reset_index(drop=True); tl = grp_t.reset_index(drop=True)
+            mx, mt = set(), set()
+            for xi, xr in xl.iterrows():
+                for ti, tr in tl.iterrows():
+                    if ti in mt: continue
+                    if abs(xr['ton_xnt'] - tr['ton_tk']) < 0.01:
+                        results.append(make_row(xr, tr, 'exact_ton'))
+                        used_tk.add(grp_t.index[ti]); mx.add(xi); mt.add(ti); break
+            for xi, xr in xl.iterrows():
+                if xi in mx: continue
+                best_d, best_ti, best_tr = float('inf'), None, None
+                for ti, tr in tl.iterrows():
+                    if ti in mt: continue
+                    d = abs(xr['ton_xnt'] - tr['ton_tk'])
+                    if d < best_d: best_d, best_ti, best_tr = d, ti, tr
+                if best_tr is not None:
+                    results.append(make_row(xr, best_tr, 'nearest_ton'))
+                    used_tk.add(grp_t.index[best_ti]); mt.add(best_ti)
+                else:
+                    results.append(make_row(xr, None, 'no_tk'))
+        else:
+            for _, xr in grp_x.iterrows():
+                if xr['ton_xnt'] != 0:
+                    results.append(make_row(xr, None, 'no_tk'))
+
+    for idx, tr in df_tk.iterrows():
+        if idx not in used_tk and abs(tr['ton_tk']) >= 0.01:
+            results.append({
+                'ma': tr['ma'], 'ten': '', 'nd': '', 'gia': '',
+                'ton_xnt': None, 'ten_tk': tr['ten_tk'],
+                'nd_tk': tr['nd_tk'], 'ton_tk': tr['ton_tk'],
+                'method': 'no_xnt', 'cl': None,
+            })
+
+    return pd.DataFrame(results), None
+
+def dc_run_kn(df_bbkn_raw, df_tk_raw, global_map, sl_col=9):
+    df_kn = dc_parse_raw_lines_bbkn(df_bbkn_raw, sl_col)
+    if df_kn.empty:
+        return None, "Không đọc được dữ liệu từ file BBKN"
+    df_tk = dc_parse_tk(df_tk_raw)
+    if df_tk.empty:
+        return None, "Không đọc được dữ liệu từ file Thống kê"
+    df_r = dc_match_hpt_to_tk(df_kn, df_tk, 'nhap_tk')
+    df_r = df_r.rename(columns={'sl_hpt': 'nhap_hpt', 'sl_tk': 'nhap_tk'})
+    return df_r, None
+
+def dc_run_kk(df_bbkk_raw, df_tk_raw, global_map, sl_col=8):
+    df_kk = dc_parse_raw_lines_bbkk(df_bbkk_raw, sl_col)
+    if df_kk.empty:
+        return None, "Không đọc được dữ liệu từ file Biên bản kiểm kê"
+    df_tk = dc_parse_tk(df_tk_raw)
+    if df_tk.empty:
+        return None, "Không đọc được dữ liệu từ file Thống kê"
+    df_r = dc_match_hpt_to_tk(df_kk, df_tk, 'ton_tk')
+    df_r = df_r.rename(columns={'sl_hpt': 'sl_kk', 'sl_tk': 'ton_tk'})
+    return df_r, None
+
+
+# ── Excel export helpers ──────────────────────────────────────────────────────
+def _dc_hdr(ws, headers, fill_hex='1F3864'):
+    TH = Side(style='thin'); MH = Side(style='medium')
+    FH = PatternFill('solid', fgColor=fill_hex)
+    for ci, (h, w) in enumerate(headers, 1):
+        c = ws.cell(row=1, column=ci, value=h)
+        c.font = Font(name='Times New Roman', bold=True, size=11, color='FFFFFF')
+        c.fill = FH
+        c.border = Border(left=TH, right=TH, top=MH, bottom=MH)
+        c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        ws.column_dimensions[get_column_letter(ci)].width = w
+    ws.row_dimensions[1].height = 36
+
+def _dc_row(ws, ri, vals, fill, right_cols=(), center_cols=()):
+    TH = Side(style='thin')
+    for ci, v in enumerate(vals, 1):
+        safe = '' if (v is None or (isinstance(v, float) and pd.isna(v))) else v
+        c = ws.cell(row=ri, column=ci, value=safe)
+        c.font = Font(name='Times New Roman', size=11)
+        c.fill = fill
+        c.border = Border(left=TH, right=TH, top=TH, bottom=TH)
+        if ci in right_cols:
+            c.alignment = Alignment(vertical='center', horizontal='right')
+            if isinstance(safe, (int, float)): c.number_format = '#,##0.##'
+        elif ci in center_cols:
+            c.alignment = Alignment(vertical='center', horizontal='center')
+        else:
+            c.alignment = Alignment(vertical='center', horizontal='left')
+    ws.row_dimensions[ri].height = 18
+
+FOK = PatternFill('solid', fgColor='E2EFDA')
+FLE = PatternFill('solid', fgColor='FFD7D7')
+FWA = PatternFill('solid', fgColor='FFF9C4')
+FBL = PatternFill('solid', fgColor='DEEBF7')
+FOR = PatternFill('solid', fgColor='FCE4D6')
+
+def dc_build_xnt_sheets(wb, df_res, tn):
+    ws = wb.create_sheet(f"DC XNT {tn.replace('/','_')}")
+    _dc_hdr(ws, [('Mã HPT',16),('Tên thuốc (HPT)',32),('Tên thuốc (TK)',28),
+              ('Nồng độ',22),('Đơn giá',12),('Tồn cuối HPT',13),
+              ('Tồn cuối TK',13),('Chênh lệch',13),('Trạng thái',25),('Phương pháp',18)])
+    mm = {'1-1':'Chính xác','exact_ton':'Khớp tồn','nearest_ton':'Gần nhất ⚠️'}
+    df_m = df_res[df_res['cl'].notna()]
+    df_l = df_m[df_m['cl'].abs()>=0.01].sort_values('cl')
+    df_k = df_m[df_m['cl'].abs()<0.01]
+    for ri,(_, r) in enumerate(pd.concat([df_l,df_k],ignore_index=True).iterrows(), 2):
+        cl = r['cl']
+        if abs(cl)<0.01:  fill,st = FOK,'✅ Khớp'
+        elif cl>0:         fill,st = FLE,f'⬆️ HPT cao hơn {cl:+.0f}'
+        else:              fill,st = FLE,f'⬇️ HPT thấp hơn {cl:+.0f}'
+        if r['method']=='nearest_ton' and abs(cl)>=0.01: fill=FWA
+        _dc_row(ws,ri,[r['ma'],r['ten'],r.get('ten_tk',''),r['nd'],r['gia'],
+                    r['ton_xnt'],r['ton_tk'],cl,st,mm.get(r['method'],'')],
+             fill,right_cols=(5,6,7,8),center_cols=(1,9,10))
+    ws.freeze_panes='A2'
+    ws2 = wb.create_sheet("XNT – HPT có, TK không")
+    _dc_hdr(ws2,[('Mã HPT',16),('Tên thuốc HPT',35),('Nồng độ',25),('Đơn giá',12),('Tồn HPT',12),('Ghi chú',35)])
+    for ri,(_, r) in enumerate(df_res[df_res['method']=='no_tk'].iterrows(), 2):
+        _dc_row(ws2,ri,[r['ma'],r['ten'],r['nd'],r['gia'],r['ton_xnt'],'HPT có nhưng TK không theo dõi'],
+             FBL,right_cols=(3,4,5))
+    ws3 = wb.create_sheet("XNT – TK có, HPT không")
+    _dc_hdr(ws3,[('Mã HPT',16),('Tên thuốc TK',35),('Nồng độ TK',25),('Tồn TK',12),('Ghi chú',35)])
+    for ri,(_, r) in enumerate(df_res[df_res['method']=='no_xnt'].iterrows(), 2):
+        _dc_row(ws3,ri,[r['ma'],r['ten_tk'],r['nd_tk'],r['ton_tk'],'TK có nhưng HPT không phát sinh'],
+             FOR,right_cols=(4,))
+
+def dc_build_kn_sheets(wb, df_res, tn):
+    ws = wb.create_sheet(f"DC Kiểm nhập {tn.replace('/','_')}")
+    _dc_hdr(ws,[('Mã HPT',16),('Tên thuốc (HPT)',32),('Tên thuốc (TK)',28),
+             ('Nồng độ',22),('Đơn giá',12),('Nhập HPT (tổng)',13),
+             ('Số HĐ',8),('Danh sách HĐ',22),('Nhập TK',12),('Chênh lệch',13),('Trạng thái',28)])
+    df_m = df_res[df_res['status']=='matched']
+    df_l = df_m[df_m['cl'].abs()>=0.01].sort_values('cl')
+    df_k = df_m[df_m['cl'].abs()<0.01]
+    for ri,(_, r) in enumerate(pd.concat([df_l,df_k],ignore_index=True).iterrows(), 2):
+        cl = r['cl']
+        if abs(cl)<0.01:  fill,st = FOK,'✅ Khớp'
+        elif cl>0:         fill,st = FLE,f'⬆️ HPT cao hơn {cl:+.0f}'
+        else:              fill,st = FLE,f'⬇️ HPT thấp hơn {cl:+.0f}'
+        _dc_row(ws,ri,[r['ma'],r['ten_hpt'],r['ten_tk'],r['nd'],r['gia'],
+                    r['nhap_hpt'],r.get('n_hoadon',''),r.get('hoa_don',''),
+                    r['nhap_tk'],cl,st],
+             fill,right_cols=(5,6,8,9,10),center_cols=(1,11))
+    ws.freeze_panes='A2'
+    ws2 = wb.create_sheet("KN – HPT có, TK không")
+    _dc_hdr(ws2,[('Mã HPT',16),('Tên thuốc HPT',35),('Nồng độ',25),('Đơn giá',12),
+              ('Nhập HPT (tổng)',13),('Danh sách HĐ',22),('Ghi chú',35)])
+    for ri,(_, r) in enumerate(df_res[df_res['status']=='hpt_no_tk'].iterrows(), 2):
+        _dc_row(ws2,ri,[r['ma'],r['ten_hpt'],r['nd'],r['gia'],r['nhap_hpt'],
+                     r.get('hoa_don',''),'HPT có nhưng TK không có số nhập'],
+             FBL,right_cols=(3,4,5))
+    ws3 = wb.create_sheet("KN – TK có, HPT không")
+    _dc_hdr(ws3,[('Mã HPT',16),('Tên thuốc TK',35),('Nồng độ TK',25),('Nhập TK',12),('Ghi chú',35)])
+    for ri,(_, r) in enumerate(df_res[df_res['status']=='tk_no_hpt'].iterrows(), 2):
+        _dc_row(ws3,ri,[r['ma'],r['ten_tk'],r['nd'],r['nhap_tk'],'TK có nhập nhưng HPT không có'],
+             FOR,right_cols=(4,))
+
+def dc_build_kk_sheets(wb, df_res, tn):
+    ws = wb.create_sheet(f"DC Kiểm kê {tn.replace('/','_')}")
+    _dc_hdr(ws,[('Mã HPT',16),('Tên thuốc (HPT)',32),('Tên thuốc (TK)',28),
+             ('Nồng độ',22),('Đơn giá',12),('SL Kiểm kê (tổng)',14),
+             ('Tồn cuối TK',13),('Chênh lệch',13),('Trạng thái',28)])
+    df_m = df_res[df_res['status']=='matched']
+    df_l = df_m[df_m['cl'].abs()>=0.01].sort_values('cl')
+    df_k = df_m[df_m['cl'].abs()<0.01]
+    for ri,(_, r) in enumerate(pd.concat([df_l,df_k],ignore_index=True).iterrows(), 2):
+        cl = r['cl']
+        if abs(cl)<0.01:  fill,st = FOK,'✅ Khớp'
+        elif cl>0:         fill,st = FLE,f'⬆️ HPT cao hơn {cl:+.0f}'
+        else:              fill,st = FLE,f'⬇️ HPT thấp hơn {cl:+.0f}'
+        _dc_row(ws,ri,[r['ma'],r['ten_hpt'],r['ten_tk'],r['nd'],r['gia'],
+                    r['sl_kk'],r['ton_tk'],cl,st],
+             fill,right_cols=(5,6,7,8),center_cols=(1,9))
+    ws.freeze_panes='A2'
+    ws2 = wb.create_sheet("KK – HPT có, TK không")
+    _dc_hdr(ws2,[('Mã HPT',16),('Tên thuốc HPT',35),('Nồng độ',25),('Đơn giá',12),
+              ('SL Kiểm kê',12),('Ghi chú',35)])
+    for ri,(_, r) in enumerate(df_res[df_res['status']=='hpt_no_tk'].iterrows(), 2):
+        _dc_row(ws2,ri,[r['ma'],r['ten_hpt'],r['nd'],r['gia'],r['sl_kk'],'HPT có nhưng TK không theo dõi tồn'],
+             FBL,right_cols=(3,4,5))
+    ws3 = wb.create_sheet("KK – TK có, HPT không")
+    _dc_hdr(ws3,[('Mã HPT',16),('Tên thuốc TK',35),('Nồng độ TK',25),('Tồn TK',12),('Ghi chú',35)])
+    for ri,(_, r) in enumerate(df_res[df_res['status']=='tk_no_hpt'].iterrows(), 2):
+        _dc_row(ws3,ri,[r['ma'],r['ten_tk'],r['nd'],r['ton_tk'],'TK có tồn nhưng không có trong kiểm kê'],
+             FOR,right_cols=(4,))
+
+def dc_build_summary(wb, results_map, tn):
+    ws = wb.create_sheet("📊 Tóm tắt", 0)
+    ws.column_dimensions['A'].width = 40; ws.column_dimensions['B'].width = 18
+    def wr(ri,k,v,bold=False):
+        c1=ws.cell(row=ri,column=1,value=k); c2=ws.cell(row=ri,column=2,value=v)
+        c1.font=Font(name='Times New Roman',bold=bold,size=12 if bold else 11)
+        c2.font=Font(name='Times New Roman',size=11)
+    ri=1; wr(ri,f'BÁO CÁO ĐỐI CHIẾU DƯỢC – {tn}','',bold=True); ri+=2
+    for label,df_r,col_cl,col_st,no_vals,no_labels in results_map:
+        wr(ri,f'── {label} ──','',bold=True); ri+=1
+        if df_r is not None and col_cl:
+            m=df_r[df_r[col_cl].notna()]
+            nk=(m[col_cl].abs()<0.01).sum(); nl=(m[col_cl].abs()>=0.01).sum()
+            pct=nk/(nk+nl)*100 if (nk+nl)>0 else 0
+            wr(ri,'  ✅ Khớp hoàn toàn',f'{nk} dòng'); ri+=1
+            wr(ri,'  ⚠️  Chênh lệch',f'{nl} dòng'); ri+=1
+            wr(ri,'  📊 Tỷ lệ khớp',f'{pct:.1f}%'); ri+=1
+        if df_r is not None and col_st:
+            for nv,nl2 in zip(no_vals,no_labels):
+                cnt=(df_r[col_st]==nv).sum()
+                wr(ri,f'  📋 {nl2}',f'{cnt} dòng'); ri+=1
+        ri+=1
+
+def dc_export_excel(res_xnt, res_kn, res_kk, tn):
+    wb=Workbook(); wb.remove(wb.active)
+    if res_xnt is not None: dc_build_xnt_sheets(wb, res_xnt, tn)
+    if res_kn  is not None: dc_build_kn_sheets(wb, res_kn, tn)
+    if res_kk  is not None: dc_build_kk_sheets(wb, res_kk, tn)
+    rm=[]
+    if res_xnt is not None:
+        rm.append(('Đối chiếu XNT',res_xnt,'cl','method',
+                   ['no_tk','no_xnt'],['HPT có – TK không','TK có – HPT không']))
+    if res_kn is not None:
+        rm.append(('Đối chiếu Kiểm nhập',res_kn,'cl','status',
+                   ['hpt_no_tk','tk_no_hpt'],['HPT có – TK không','TK có – HPT không']))
+    if res_kk is not None:
+        rm.append(('Đối chiếu Kiểm kê',res_kk,'cl','status',
+                   ['hpt_no_tk','tk_no_hpt'],['HPT có – TK không','TK có – HPT không']))
+    dc_build_summary(wb, rm, tn)
+    buf=io.BytesIO(); wb.save(buf); buf.seek(0)
+    return buf.getvalue()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  GIAO DIỆN CHÍNH
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <div class="hero">
   <div class="badge">🏥 Bệnh viện Đà Nẵng · Khoa Dược</div>
   <h1>HỆ THỐNG TỰ ĐỘNG HÓA<br>BIÊN BẢN DƯỢC</h1>
-  <p class="sub">Biên Bản Kiểm Nhập (BBKN) &nbsp;·&nbsp; Báo Cáo Xuất Nhập Tồn (XNT)</p>
+  <p class="sub">Biên Bản Kiểm Nhập (BBKN) &nbsp;·&nbsp; Xuất Nhập Tồn (XNT) &nbsp;·&nbsp; Đối Chiếu Dược</p>
 </div>
 """, unsafe_allow_html=True)
 
-report_type = st.radio(
-    "**Chọn loại báo cáo cần xử lý:**",
-    ["📋  Biên Bản Kiểm Nhập (BBKN)", "📊  Báo Cáo Xuất Nhập Tồn (XNT)"],
-    horizontal=True,
-)
-is_bbkn = report_type.startswith("📋")
+# ── 3 Tab chính ───────────────────────────────────────────────────────────────
+tab_bbkn, tab_xnt_main, tab_dc = st.tabs([
+    "📋 Biên Bản Kiểm Nhập",
+    "📊 Báo Cáo XNT",
+    "🔍 Đối Chiếu Dược",
+])
 
-if is_bbkn:
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  TAB 1 – BBKN                                                           ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+with tab_bbkn:
     st.markdown("""<div class="tab-desc">
     Upload <b>file dữ liệu thô BBKN từ HPT</b> (.xls/.xlsx) và <b>file form chuẩn kiểm nhập 2026</b>.<br>
     Logic: Lọc bỏ dòng Số lượng nhập = 0 · Phân nhóm theo công ty · Tính thành tiền tự động.
     </div>""", unsafe_allow_html=True)
-    raw_types = ["xls","xlsx"]
-    raw_label = "📂 File dữ liệu thô HPT (BBKN)"
-    tpl_label = "📄 File form chuẩn Kiểm Nhập 2026"
-    qty_col   = 9
-    lbls      = ("Công ty cung cấp","Mặt hàng có nhập","Dòng SL=0 đã lọc")
-else:
+
+    col1, col2 = st.columns(2)
+    with col1: raw_file_bbkn = st.file_uploader("📂 File dữ liệu thô HPT (BBKN)", type=["xls","xlsx"], key="bbkn_raw")
+    with col2: tpl_file_bbkn = st.file_uploader("📄 File form chuẩn Kiểm Nhập 2026", type=["xlsx"], key="bbkn_tpl")
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    ready_bbkn = raw_file_bbkn is not None and tpl_file_bbkn is not None
+    if st.button("⚡ Bắt đầu xử lý BBKN", disabled=not ready_bbkn, key="btn_bbkn"):
+        with st.spinner("Đang xử lý BBKN..."):
+            try:
+                raw_b = raw_file_bbkn.read()
+                if raw_file_bbkn.name.endswith('.xls'):
+                    try:    raw_df=pd.read_excel(io.BytesIO(raw_b),sheet_name=0,header=None,engine='xlrd')
+                    except: raw_df=pd.read_excel(io.BytesIO(raw_b),sheet_name=0,header=None)
+                else:
+                    raw_df=pd.read_excel(io.BytesIO(raw_b),sheet_name=0,header=None)
+                tpl_b = tpl_file_bbkn.read()
+                companies, stats = parse_companies(raw_df, 9)
+                if not companies:
+                    st.error("❌ Không tìm thấy dữ liệu hợp lệ. Kiểm tra lại file HPT.")
+                    st.stop()
+                result = build_bbkn(tpl_b, companies)
+                st.session_state.update(bbkn_result=result, bbkn_stats=stats, bbkn_done=True)
+            except Exception as e:
+                st.error(f"❌ Lỗi: {e}"); st.exception(e)
+
+    if st.session_state.get("bbkn_done"):
+        stats  = st.session_state["bbkn_stats"]
+        result = st.session_state["bbkn_result"]
+        now    = datetime.datetime.now()
+        fname  = f"BBKN_T{now.month}_{now.year}_HoanChinh.xlsx"
+        st.markdown(f"""
+        <div class="ok-box">
+          <div class="icon">✅</div>
+          <h3>Xử lý BBKN hoàn tất!</h3>
+          <p>File sẵn sàng — tải về và in ký hội đồng.</p>
+        </div>
+        <div class="stat-grid">
+          <div class="stat-card"><div class="num">{stats['companies']}</div><div class="lbl">Công ty cung cấp</div></div>
+          <div class="stat-card"><div class="num">{stats['drugs']}</div><div class="lbl">Mặt hàng có nhập</div></div>
+          <div class="stat-card"><div class="num">{stats['skipped']}</div><div class="lbl">Dòng SL=0 đã lọc</div></div>
+        </div>""", unsafe_allow_html=True)
+        st.download_button(label=f"⬇️ Tải File BBKN – {fname}", data=result, file_name=fname,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_bbkn")
+        st.markdown("""<div class="note">💡 <b>Khi in:</b> File đã thiết lập sẵn <b>A4 Ngang · Fit All Columns on One Page</b>.
+        Mở Excel → Ctrl+P → in ngay.</div>""", unsafe_allow_html=True)
+
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  TAB 2 – XNT                                                            ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+with tab_xnt_main:
     st.markdown("""<div class="tab-desc">
     Upload <b>file dữ liệu thô XNT từ HPT</b> (.xlsx) và <b>file BBXNT-2026.xlsx</b> làm form chuẩn.<br>
     Logic: Giữ dòng có Tồn cuối ≠ 0 · Phân nhóm theo công ty · Thành tiền = Đơn giá × Tồn cuối.
     </div>""", unsafe_allow_html=True)
-    raw_types = ["xlsx"]
-    raw_label = "📂 File dữ liệu thô HPT (XNT)"
-    tpl_label = "📄 File BBXNT-2026.xlsx (form chuẩn)"
-    qty_col   = 12   # cột Tồn cuối
-    lbls      = ("Công ty cung cấp","Mặt hàng phát sinh","Dòng tồn cuối=0 đã lọc")
 
-col1,col2 = st.columns(2)
-with col1: raw_file  = st.file_uploader(raw_label, type=raw_types)
-with col2: tpl_file  = st.file_uploader(tpl_label, type=["xlsx"])
+    col1x, col2x = st.columns(2)
+    with col1x: raw_file_xnt = st.file_uploader("📂 File dữ liệu thô HPT (XNT)", type=["xlsx"], key="xnt_raw")
+    with col2x: tpl_file_xnt = st.file_uploader("📄 File BBXNT-2026.xlsx (form chuẩn)", type=["xlsx"], key="xnt_tpl")
+    st.markdown("<hr>", unsafe_allow_html=True)
 
-st.markdown("<hr>", unsafe_allow_html=True)
+    ready_xnt_main = raw_file_xnt is not None and tpl_file_xnt is not None
+    if st.button("⚡ Bắt đầu xử lý XNT", disabled=not ready_xnt_main, key="btn_xnt_main"):
+        with st.spinner("Đang xử lý XNT..."):
+            try:
+                raw_df2 = pd.read_excel(io.BytesIO(raw_file_xnt.read()), sheet_name=0, header=None)
+                tpl_b2  = tpl_file_xnt.read()
+                companies2, stats2 = parse_companies(raw_df2, 12)
+                if not companies2:
+                    st.error("❌ Không tìm thấy dữ liệu hợp lệ."); st.stop()
+                result2 = build_xnt(tpl_b2, companies2)
+                st.session_state.update(xnt_main_result=result2, xnt_main_stats=stats2, xnt_main_done=True)
+            except Exception as e:
+                st.error(f"❌ Lỗi: {e}"); st.exception(e)
 
-ready = raw_file is not None and tpl_file is not None
-if st.button("⚡  Bắt đầu xử lý", disabled=not ready):
-    with st.spinner("Đang xử lý dữ liệu..."):
-        try:
-            raw_b = raw_file.read()
-            if raw_file.name.endswith('.xls'):
-                try:    raw_df=pd.read_excel(io.BytesIO(raw_b),sheet_name=0,header=None,engine='xlrd')
-                except: raw_df=pd.read_excel(io.BytesIO(raw_b),sheet_name=0,header=None)
-            else:
-                raw_df=pd.read_excel(io.BytesIO(raw_b),sheet_name=0,header=None)
+    if st.session_state.get("xnt_main_done"):
+        stats2  = st.session_state["xnt_main_stats"]
+        result2 = st.session_state["xnt_main_result"]
+        now     = datetime.datetime.now()
+        fname2  = f"XNT_T{now.month}_{now.year}_HoanChinh.xlsx"
+        st.markdown(f"""
+        <div class="ok-box">
+          <div class="icon">✅</div>
+          <h3>Xử lý XNT hoàn tất!</h3>
+          <p>File sẵn sàng — tải về và kiểm tra.</p>
+        </div>
+        <div class="stat-grid">
+          <div class="stat-card"><div class="num">{stats2['companies']}</div><div class="lbl">Công ty cung cấp</div></div>
+          <div class="stat-card"><div class="num">{stats2['drugs']}</div><div class="lbl">Mặt hàng phát sinh</div></div>
+          <div class="stat-card"><div class="num">{stats2['skipped']}</div><div class="lbl">Dòng tồn cuối=0 đã lọc</div></div>
+        </div>""", unsafe_allow_html=True)
+        st.download_button(label=f"⬇️ Tải File XNT – {fname2}", data=result2, file_name=fname2,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_xnt_main")
+        st.markdown("""<div class="note">💡 <b>Khi in:</b> A4 Ngang · Fit All Columns on One Page.
+        Mở Excel → Ctrl+P → in ngay.</div>""", unsafe_allow_html=True)
 
-            tpl_b = tpl_file.read()
-            companies, stats = parse_companies(raw_df, qty_col)
 
-            if not companies:
-                st.error("❌ Không tìm thấy dữ liệu hợp lệ. Kiểm tra lại file HPT.")
-                st.stop()
-
-            result = build_bbkn(tpl_b, companies) if is_bbkn else build_xnt(tpl_b, companies)
-            st.session_state.update(result=result, stats=stats,
-                                    done=True, is_bbkn=is_bbkn, lbls=lbls)
-        except Exception as e:
-            st.error(f"❌ Lỗi: {e}"); st.exception(e)
-
-if st.session_state.get("done"):
-    stats  = st.session_state["stats"]
-    result = st.session_state["result"]
-    lbls   = st.session_state["lbls"]
-    now    = datetime.datetime.now()
-    pre    = "BBKN" if st.session_state["is_bbkn"] else "XNT"
-    fname  = f"{pre}_T{now.month}_{now.year}_HoanChinh.xlsx"
-
-    st.markdown(f"""
-    <div class="ok-box">
-      <div class="icon">✅</div>
-      <h3>Xử lý hoàn tất!</h3>
-      <p>File sẵn sàng — tải về và in ký hội đồng.</p>
-    </div>
-    <div class="stat-grid">
-      <div class="stat-card"><div class="num">{stats['companies']}</div><div class="lbl">{lbls[0]}</div></div>
-      <div class="stat-card"><div class="num">{stats['drugs']}</div><div class="lbl">{lbls[1]}</div></div>
-      <div class="stat-card"><div class="num">{stats['skipped']}</div><div class="lbl">{lbls[2]}</div></div>
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  TAB 3 – ĐỐI CHIẾU DƯỢC                                                ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+with tab_dc:
+    st.markdown("""<div class="info-box">
+    Module đối chiếu số liệu HPT vs Thống kê. Upload file 1 lần, dùng cho cả 3 loại đối chiếu:
+    <b>XNT · Kiểm nhập · Kiểm kê</b>.
     </div>""", unsafe_allow_html=True)
 
-    st.download_button(
-        label=f"⬇️  Tải File Hoàn Chỉnh – {fname}",
-        data=result, file_name=fname,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    st.markdown("""<div class="note">
-    💡 <b>Khi in:</b> File đã thiết lập sẵn <b>A4 Ngang · Fit All Columns on One Page</b> · 
-    Tiêu đề cột lặp lại mỗi trang. Mở Excel → Ctrl+P → in ngay.
+    # Tháng / Năm
+    dca, dcb = st.columns(2)
+    with dca: dc_thang = st.selectbox("Tháng báo cáo", range(1,13), index=2, format_func=lambda x: f"Tháng {x}", key="dc_thang")
+    with dcb: dc_nam   = st.number_input("Năm", min_value=2024, max_value=2030, value=2026, key="dc_nam")
+    dc_tn = f"T{dc_thang}/{dc_nam}"
+
+    st.markdown("""
+    <div class="upload-section">
+    <h4>📂 Upload File – dùng chung cho cả 3 module đối chiếu</h4>
     </div>""", unsafe_allow_html=True)
+
+    dcu1, dcu2 = st.columns(2)
+    with dcu1:
+        dc_f_nhap = st.file_uploader("📥 Báo cáo Nhập hàng trong tháng (có Mã HPT)",
+            type=["xlsx","xls"], accept_multiple_files=True, key="dc_nhap")
+    with dcu2:
+        dc_f_xuat = st.file_uploader("📤 Báo cáo Xuất kho trong tháng (có Mã HPT)",
+            type=["xlsx","xls"], accept_multiple_files=True, key="dc_xuat")
+
+    dcu3, dcu4 = st.columns(2)
+    with dcu3:
+        dc_f_tk = st.file_uploader("📋 File XNT Thống kê – số chuẩn (dùng chung)",
+            type=["xlsx","xls"], key="dc_tk")
+    with dcu4:
+        dc_f_xnt_tho = st.file_uploader("📊 File XNT thô HPT (chỉ cho tab Đối chiếu XNT)",
+            type=["xlsx","xls"], key="dc_xnt_tho")
+
+    dcu5, dcu6 = st.columns(2)
+    with dcu5:
+        dc_f_bbkn = st.file_uploader("📄 Biên bản Kiểm nhập – BBKN",
+            type=["xlsx","xls"], key="dc_bbkn")
+    with dcu6:
+        dc_f_bbkk = st.file_uploader("📄 Biên bản Kiểm kê – BBKK",
+            type=["xlsx","xls"], key="dc_bbkk")
+
+    # Hiển thị trạng thái bảng mã
+    gmap_dc = st.session_state.get('dc_global_map')
+    if gmap_dc is not None and not gmap_dc.empty:
+        n_ma = gmap_dc['ma'].nunique()
+        st.markdown(f'<div class="map-box">✅ <b>Bảng mã hàng sẵn sàng:</b> {n_ma} mã HPT</div>',
+                    unsafe_allow_html=True)
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    # Tùy chọn cột SL
+    dc_sl_col_kn = 9; dc_sl_col_kk = 8
+    with st.expander("⚙️ Tùy chọn cột số lượng (nếu cấu trúc file khác mặc định)", expanded=False):
+        dcc1, dcc2 = st.columns(2)
+        with dcc1:
+            if dc_f_bbkn:
+                try:
+                    dc_f_bbkn.seek(0)
+                    pv = pd.read_excel(io.BytesIO(dc_f_bbkn.read()), sheet_name=0, header=None, nrows=12)
+                    dc_f_bbkn.seek(0)
+                    opts = {f"Cột {i} | {str(pv.iloc[9,i] if len(pv)>9 else '')[:28]}": i
+                            for i in range(len(pv.columns))}
+                    def_kn = next((k for k,v in opts.items() if v==9), list(opts.keys())[0])
+                    dc_sl_col_kn = opts[st.selectbox("Cột SL nhập trong BBKN:", list(opts.keys()),
+                        index=list(opts.keys()).index(def_kn), key="dc_sel_kn")]
+                except: pass
+        with dcc2:
+            if dc_f_bbkk:
+                try:
+                    dc_f_bbkk.seek(0)
+                    pv2 = pd.read_excel(io.BytesIO(dc_f_bbkk.read()), sheet_name=0, header=None, nrows=12)
+                    dc_f_bbkk.seek(0)
+                    opts2 = {f"Cột {i} | {str(pv2.iloc[9,i] if len(pv2)>9 else '')[:28]}": i
+                             for i in range(len(pv2.columns))}
+                    def_kk = next((k for k,v in opts2.items() if v==8), list(opts2.keys())[0])
+                    dc_sl_col_kk = opts2[st.selectbox("Cột SL thực tế trong BBKK:", list(opts2.keys()),
+                        index=list(opts2.keys()).index(def_kk), key="dc_sel_kk")]
+                except: pass
+
+    # 3 sub-tabs bên trong tab Đối Chiếu
+    sub_xnt, sub_kn, sub_kk = st.tabs([
+        "📊 Đối chiếu XNT",
+        "📥 Đối chiếu Kiểm nhập",
+        "🔍 Đối chiếu Kiểm kê",
+    ])
+
+    # ── SUB-TAB: XNT ──────────────────────────────────────────────────────────
+    with sub_xnt:
+        st.markdown("""<div class="info-box">
+        Cần file <b>XNT thô HPT</b> + <b>XNT Thống kê</b> + file <b>Nhập/Xuất kho</b>.
+        </div>""", unsafe_allow_html=True)
+        ready_dc_xnt = bool((dc_f_nhap or dc_f_xuat) and dc_f_xnt_tho and dc_f_tk)
+        if st.button("🔍 Chạy Đối chiếu XNT", key="dc_btn_xnt", disabled=not ready_dc_xnt):
+            with st.spinner("Đang xử lý đối chiếu XNT..."):
+                try:
+                    dfs_nx = []
+                    for f in (dc_f_nhap or []):
+                        f.seek(0); dfs_nx.append(pd.read_excel(io.BytesIO(f.read()), sheet_name=0, header=None))
+                    for f in (dc_f_xuat or []):
+                        f.seek(0); dfs_nx.append(pd.read_excel(io.BytesIO(f.read()), sheet_name=0, header=None))
+                    st.session_state['dc_global_map'] = dc_extract_ma_map(dfs_nx)
+                    dc_f_xnt_tho.seek(0); dc_f_tk.seek(0)
+                    df_xnt_raw = pd.read_excel(io.BytesIO(dc_f_xnt_tho.read()), sheet_name=0, header=None)
+                    df_tk_raw  = pd.read_excel(io.BytesIO(dc_f_tk.read()), sheet_name=0, header=None)
+                    df_res, err = dc_run_xnt(dfs_nx, df_xnt_raw, df_tk_raw)
+                    if err: st.error(f"❌ {err}"); st.stop()
+                    st.session_state.update({'dc_xnt_result': df_res, 'dc_xnt_done': True, 'dc_tn': dc_tn})
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Lỗi: {e}"); st.exception(e)
+
+        if st.session_state.get('dc_xnt_done'):
+            df_r = st.session_state['dc_xnt_result']
+            dm   = df_r[df_r['cl'].notna()]
+            nk   = (dm['cl'].abs()<0.01).sum(); nl = (dm['cl'].abs()>=0.01).sum()
+            dn_tk  = df_r[df_r['method']=='no_tk'];  dn_xnt = df_r[df_r['method']=='no_xnt']
+            st.markdown(f"""<div class="ok-box"><div class="icon">✅</div>
+              <h3>Đối chiếu XNT hoàn tất – {st.session_state.get('dc_tn','')}</h3></div>
+            <div class="stat-grid-4">
+              <div class="stat-card"><div class="num" style="color:#166534">{nk}</div><div class="lbl">✅ Khớp</div></div>
+              <div class="stat-card"><div class="num" style="color:#dc2626">{nl}</div><div class="lbl">⚠️ Chênh lệch</div></div>
+              <div class="stat-card"><div class="num" style="color:#2563a8">{len(dn_tk)}</div><div class="lbl">HPT có – TK không</div></div>
+              <div class="stat-card"><div class="num" style="color:#d97706">{len(dn_xnt)}</div><div class="lbl">TK có – HPT không</div></div>
+            </div>""", unsafe_allow_html=True)
+            dl = dm[dm['cl'].abs()>=0.01].sort_values('cl')
+            if len(dl):
+                st.markdown(f"**⚠️ {nl} dòng chênh lệch:**")
+                st.dataframe(dl[['ma','ten','nd','ton_xnt','ton_tk','cl']].rename(columns={
+                    'ma':'Mã HPT','ten':'Tên thuốc','nd':'Nồng độ',
+                    'ton_xnt':'Tồn HPT','ton_tk':'Tồn TK','cl':'Chênh lệch'}),
+                    use_container_width=True, hide_index=True)
+
+    # ── SUB-TAB: KIỂM NHẬP ────────────────────────────────────────────────────
+    with sub_kn:
+        st.markdown("""<div class="info-box">
+        Cần file <b>BBKN</b> + <b>XNT Thống kê</b>. App tự động cộng tổng tất cả hóa đơn cùng tên+nồng độ+giá.
+        </div>""", unsafe_allow_html=True)
+        ready_dc_kn = bool(dc_f_bbkn and dc_f_tk)
+        if st.button("🔍 Chạy Đối chiếu Kiểm nhập", key="dc_btn_kn", disabled=not ready_dc_kn):
+            with st.spinner("Đang xử lý Kiểm nhập..."):
+                try:
+                    dc_f_bbkn.seek(0); dc_f_tk.seek(0)
+                    df_bbkn_raw = pd.read_excel(io.BytesIO(dc_f_bbkn.read()), sheet_name=0, header=None)
+                    df_tk_raw   = pd.read_excel(io.BytesIO(dc_f_tk.read()), sheet_name=0, header=None)
+                    gmap_cur    = st.session_state.get('dc_global_map', pd.DataFrame())
+                    df_res, err = dc_run_kn(df_bbkn_raw, df_tk_raw, gmap_cur, dc_sl_col_kn)
+                    if err: st.error(f"❌ {err}"); st.stop()
+                    st.session_state.update({'dc_kn_result': df_res, 'dc_kn_done': True, 'dc_tn': dc_tn})
+                except Exception as e:
+                    st.error(f"❌ Lỗi: {e}"); st.exception(e)
+
+        if st.session_state.get('dc_kn_done'):
+            df_kn = st.session_state['dc_kn_result']
+            dm_kn = df_kn[df_kn['status']=='matched']
+            nk_kn = (dm_kn['cl'].abs()<0.01).sum(); nl_kn = (dm_kn['cl'].abs()>=0.01).sum()
+            no_tk_kn = df_kn[df_kn['status']=='hpt_no_tk']; no_hpt_kn = df_kn[df_kn['status']=='tk_no_hpt']
+            st.markdown(f"""<div class="ok-box"><div class="icon">✅</div>
+              <h3>Đối chiếu Kiểm nhập hoàn tất – {st.session_state.get('dc_tn','')}</h3></div>
+            <div class="stat-grid-4">
+              <div class="stat-card"><div class="num" style="color:#166534">{nk_kn}</div><div class="lbl">✅ Khớp</div></div>
+              <div class="stat-card"><div class="num" style="color:#dc2626">{nl_kn}</div><div class="lbl">⚠️ Chênh lệch</div></div>
+              <div class="stat-card"><div class="num" style="color:#2563a8">{len(no_tk_kn)}</div><div class="lbl">HPT có – TK không</div></div>
+              <div class="stat-card"><div class="num" style="color:#d97706">{len(no_hpt_kn)}</div><div class="lbl">TK có – HPT không</div></div>
+            </div>""", unsafe_allow_html=True)
+            dl_kn = dm_kn[dm_kn['cl'].abs()>=0.01].sort_values('cl')
+            if len(dl_kn):
+                st.markdown(f"**⚠️ {nl_kn} dòng chênh lệch:**")
+                st.dataframe(dl_kn[['ma','ten_hpt','nd','nhap_hpt','nhap_tk','cl']].rename(columns={
+                    'ma':'Mã HPT','ten_hpt':'Tên thuốc (HPT)','nd':'Nồng độ',
+                    'nhap_hpt':'Nhập HPT (tổng)','nhap_tk':'Nhập TK','cl':'Chênh lệch'}),
+                    use_container_width=True, hide_index=True)
+            if len(no_hpt_kn):
+                st.markdown(f"**📋 {len(no_hpt_kn)} mã – TK có nhập, HPT không có:**")
+                st.dataframe(no_hpt_kn[['ma','ten_tk','nd','nhap_tk']].rename(columns={
+                    'ma':'Mã HPT','ten_tk':'Tên thuốc TK','nd':'Nồng độ','nhap_tk':'Nhập TK'}),
+                    use_container_width=True, hide_index=True)
+
+    # ── SUB-TAB: KIỂM KÊ ──────────────────────────────────────────────────────
+    with sub_kk:
+        st.markdown("""<div class="info-box">
+        Cần file <b>BBKK</b> + <b>XNT Thống kê</b>. App tự động cộng tổng các dòng cùng tên+nồng độ+giá.
+        </div>""", unsafe_allow_html=True)
+        ready_dc_kk = bool(dc_f_bbkk and dc_f_tk)
+        if st.button("🔍 Chạy Đối chiếu Kiểm kê", key="dc_btn_kk", disabled=not ready_dc_kk):
+            with st.spinner("Đang xử lý Kiểm kê..."):
+                try:
+                    dc_f_bbkk.seek(0); dc_f_tk.seek(0)
+                    df_bbkk_raw = pd.read_excel(io.BytesIO(dc_f_bbkk.read()), sheet_name=0, header=None)
+                    df_tk_raw   = pd.read_excel(io.BytesIO(dc_f_tk.read()), sheet_name=0, header=None)
+                    gmap_cur    = st.session_state.get('dc_global_map', pd.DataFrame())
+                    df_res, err = dc_run_kk(df_bbkk_raw, df_tk_raw, gmap_cur, dc_sl_col_kk)
+                    if err: st.error(f"❌ {err}"); st.stop()
+                    st.session_state.update({'dc_kk_result': df_res, 'dc_kk_done': True, 'dc_tn': dc_tn})
+                except Exception as e:
+                    st.error(f"❌ Lỗi: {e}"); st.exception(e)
+
+        if st.session_state.get('dc_kk_done'):
+            df_kk2 = st.session_state['dc_kk_result']
+            dm_kk  = df_kk2[df_kk2['status']=='matched']
+            nk_kk  = (dm_kk['cl'].abs()<0.01).sum(); nl_kk = (dm_kk['cl'].abs()>=0.01).sum()
+            no_tk2 = df_kk2[df_kk2['status']=='hpt_no_tk']; no_hpt2 = df_kk2[df_kk2['status']=='tk_no_hpt']
+            st.markdown(f"""<div class="ok-box"><div class="icon">✅</div>
+              <h3>Đối chiếu Kiểm kê hoàn tất – {st.session_state.get('dc_tn','')}</h3></div>
+            <div class="stat-grid-4">
+              <div class="stat-card"><div class="num" style="color:#166534">{nk_kk}</div><div class="lbl">✅ Khớp</div></div>
+              <div class="stat-card"><div class="num" style="color:#dc2626">{nl_kk}</div><div class="lbl">⚠️ Chênh lệch</div></div>
+              <div class="stat-card"><div class="num" style="color:#2563a8">{len(no_tk2)}</div><div class="lbl">HPT có – TK không</div></div>
+              <div class="stat-card"><div class="num" style="color:#d97706">{len(no_hpt2)}</div><div class="lbl">TK có – HPT không</div></div>
+            </div>""", unsafe_allow_html=True)
+            dl_kk = dm_kk[dm_kk['cl'].abs()>=0.01].sort_values('cl')
+            if len(dl_kk):
+                st.markdown(f"**⚠️ {nl_kk} dòng chênh lệch:**")
+                st.dataframe(dl_kk[['ma','ten_hpt','nd','sl_kk','ton_tk','cl']].rename(columns={
+                    'ma':'Mã HPT','ten_hpt':'Tên thuốc (HPT)','nd':'Nồng độ',
+                    'sl_kk':'SL Kiểm kê','ton_tk':'Tồn TK','cl':'Chênh lệch'}),
+                    use_container_width=True, hide_index=True)
+            if len(no_hpt2):
+                st.markdown(f"**📋 {len(no_hpt2)} mã – TK có tồn, HPT không có:**")
+                st.dataframe(no_hpt2[['ma','ten_tk','nd','ton_tk']].rename(columns={
+                    'ma':'Mã HPT','ten_tk':'Tên thuốc TK','nd':'Nồng độ','ton_tk':'Tồn TK'}),
+                    use_container_width=True, hide_index=True)
+
+    # ── Xuất Excel tổng hợp đối chiếu ─────────────────────────────────────────
+    dc_has_any = any(st.session_state.get(k) for k in ['dc_xnt_done','dc_kn_done','dc_kk_done'])
+    if dc_has_any:
+        st.markdown("<hr>", unsafe_allow_html=True)
+        st.markdown("### 📥 Tải kết quả đối chiếu tổng hợp")
+        st.markdown("""<div class="info-box">
+        File Excel gộp tất cả kết quả vào các Sheet riêng biệt.
+        Màu <span style="background:#E2EFDA;padding:1px 6px;border-radius:3px">🟢 Xanh</span> = Khớp |
+        <span style="background:#FFD7D7;padding:1px 6px;border-radius:3px">🔴 Đỏ</span> = Lệch.
+        </div>""", unsafe_allow_html=True)
+        tn_export = st.session_state.get('dc_tn', dc_tn)
+        excel_bytes = dc_export_excel(
+            st.session_state.get('dc_xnt_result'),
+            st.session_state.get('dc_kn_result'),
+            st.session_state.get('dc_kk_result'),
+            tn_export)
+        st.download_button(
+            label=f"⬇️ Tải Kết Quả Đối Chiếu Tổng Hợp {tn_export} (.xlsx)",
+            data=excel_bytes,
+            file_name=f"doi_chieu_tong_hop_{tn_export.replace('/','_')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dc_dl_all")
