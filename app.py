@@ -207,6 +207,18 @@ def build_bbkn(tmpl_bytes, companies):
             try: ws.cell(row=r,column=c).value = None
             except: pass
 
+    # Xóa tên công ty thừa trong phần header (rows 13-14) nếu template có sẵn
+    for r in range(13, DS):
+        v0 = ws.cell(row=r, column=1).value
+        if v0 and isinstance(v0, str):
+            s = v0.strip()
+            # Nếu ô này chứa tên công ty (không phải tiêu đề cột) thì xóa
+            is_header_kw = any(kw in s for kw in ['STT','Số chứng','Tên thuốc','Nồng độ','Đơn vị','Thành tiền'])
+            if not is_header_kw:
+                for c in range(1, 13):
+                    try: ws.cell(row=r, column=c).value = None
+                    except: pass
+
     def wco(rn, name):
         cl = ws.cell(row=rn, column=1, value=name); ap(cl, cs[1])
         cl.font = Font(name='Times New Roman', bold=True, size=12); cl.fill = NO_FILL
@@ -950,13 +962,13 @@ def ten_thang_viet(thang):
 def format_ngay_viet(ngay, thang, nam):
     return f"ngày {ngay} tháng {thang} năm {nam}"
 
-BBKK_W = {1:5, 2:35, 3:14, 4:7.5, 5:10, 6:32, 7:11, 8:10, 9:10, 10:8, 11:10}
+BBKK_W = {1:5, 2:35, 3:14, 4:7.5, 5:10, 6:10, 7:32, 8:11, 9:11, 10:10, 11:10, 12:8}
 BBKK_A = {1:('center','center'), 2:('left','center'), 3:('left','center'),
-          4:('center','center'), 5:('center','center'), 6:('left','center'),
-          7:('center','center'), 8:('right','center'), 9:('right','center'),
-          10:('right','center'), 11:('center','center')}
-BBKK_WRAP = {2, 3, 6}
-BBKK_NUM  = {8, 9}
+          4:('center','center'), 5:('right','center'), 6:('center','center'),
+          7:('left','center'),   8:('center','center'), 9:('right','center'),
+          10:('right','center'), 11:('right','center'), 12:('center','center')}
+BBKK_WRAP = {2, 3, 7}
+BBKK_NUM  = {5, 9, 10}
 
 def bbkk_h(ws, r):
     ml = 1
@@ -1064,8 +1076,8 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
 
     # ── Lấy style từ template ────────────────────────────────────────────────
     DS = 13  # data start row (row 13 = first data row in template, rows 11-12 = headers)
-    cs = {c: gs(ws, DS, c) for c in range(1, 12)}
-    ds = {c: gs(ws, DS+1 if ws.max_row > DS else DS, c) for c in range(1, 12)}
+    cs = {c: gs(ws, DS, c) for c in range(1, 13)}
+    ds = {c: gs(ws, DS+1 if ws.max_row > DS else DS, c) for c in range(1, 13)}
 
     # Lấy style từ row đầu tiên có số liệu
     first_data_row = None
@@ -1074,7 +1086,7 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
             first_data_row = r
             break
     if first_data_row:
-        ds = {c: gs(ws, first_data_row, c) for c in range(1, 12)}
+        ds = {c: gs(ws, first_data_row, c) for c in range(1, 13)}
 
     # ── Tìm TẤT CẢ vị trí "Tổng khoản" → dùng dòng CUỐI CÙNG, xóa các dòng cũ ──
     tk_rows = []
@@ -1097,7 +1109,7 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
     for m in [str(mr) for mr in ws.merged_cells.ranges if DS <= mr.min_row <= fs]:
         ws.merged_cells.remove(m)
     for r in range(DS, fs + 1):
-        for c in range(1, 12):
+        for c in range(1, 13):
             try: ws.cell(row=r, column=c).value = None
             except: pass
 
@@ -1113,32 +1125,35 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
     def wdr_kk(rn, stt, dr):
         ten = str(dr[1]).strip() if not pd.isna(dr[1]) else ''
         nd  = str(dr[2]).strip() if not pd.isna(dr[2]) else ''
-        # Cột 2: chỉ tên thuốc (KHÔNG ghép nồng độ — nồng độ đã có cột 3 riêng)
+        # Form BBKK: 1=STT 2=TênThuốc 3=NồngĐộ 4=DVT 5=ĐơnGiá 6=SốLô 7=HãngSX 8=HạnDùng 9=SLSổSách 10=SLThựcTế 11=Hỏng 12=GhiChú
+        # Raw data: col0=STT col1=Tên col2=NồngĐộ col3=DVT col4=ĐơnGiá col5=SốLô col6=HãngSX col7=HạnDùng col8=SLSổSách col10=SLThựcTế
         cols = [
-            (1,  stt,                                               'center', False, None),
-            (2,  ten,                                               'left',   True,  None),
-            (3,  nd,                                                'left',   False, None),
-            (4,  str(dr[3]).strip() if not pd.isna(dr[3]) else '',  'center', False, None),
-            (5,  str(dr[5]).strip() if not pd.isna(dr[5]) else '',  'center', False, None),
-            (6,  str(dr[6]).strip() if not pd.isna(dr[6]) else '',  'left',   True,  None),
-            (7,  dr[7] if isinstance(dr[7], datetime.datetime)
-                 else ('' if pd.isna(dr[7]) else dr[7]),            'center', False, 'DD/MM/YYYY'),
-            (8,  float(dr[8]) if not pd.isna(dr[8]) else 0,        'right',  False, '#,##0'),
+            (1,  stt,                                                'center', False, None),
+            (2,  ten,                                                'left',   True,  None),
+            (3,  nd,                                                 'left',   False, None),
+            (4,  str(dr[3]).strip() if not pd.isna(dr[3]) else '',   'center', False, None),
+            (5,  float(dr[4]) if not pd.isna(dr[4]) else 0,         'right',  False, '#,##0'),
+            (6,  str(dr[5]).strip() if not pd.isna(dr[5]) else '',   'center', False, None),
+            (7,  str(dr[6]).strip() if not pd.isna(dr[6]) else '',   'left',   True,  None),
+            (8,  dr[7] if isinstance(dr[7], datetime.datetime)
+                 else ('' if pd.isna(dr[7]) else dr[7]),             'center', False, 'DD/MM/YYYY'),
+            (9,  float(dr[8]) if not pd.isna(dr[8]) else 0,         'right',  False, '#,##0'),
         ]
-        sl_tt = dr[10] if not pd.isna(dr.get(10, float('nan'))) else (dr[8] if not pd.isna(dr[8]) else 0)
-        try: sl_tt = float(sl_tt)
+        col10 = dr[10] if 10 in dr.index and not pd.isna(dr[10]) else (dr[8] if not pd.isna(dr[8]) else 0)
+        try: sl_tt = float(col10)
         except: sl_tt = 0
-        cols.append((9, sl_tt, 'right', False, '#,##0'))
+        cols.append((10, sl_tt, 'right', False, '#,##0'))
         for col, val, ha, wrap, fmt in cols:
             cl = ws.cell(row=rn, column=col, value=val)
             ap(cl, ds[col])
             cl.font = Font(name='Times New Roman', size=11)
             cl.alignment = Alignment(horizontal=ha, vertical='center', wrap_text=wrap)
             if fmt and val != '': cl.number_format = fmt
-        # Cột 10 (Hỏng) và 11 (Ghi chú) để trống
-        for c in (10, 11):
-            cc = ws.cell(row=rn, column=c, value='')
-            ap(cc, ds[c])
+        # Cột 11 (Hỏng) và 12 (Ghi chú) để trống
+        for c in (11, 12):
+            if c in ds:
+                cc = ws.cell(row=rn, column=c, value='')
+                ap(cc, ds[c])
 
     stt = 1
     for dr in drugs:
@@ -1152,20 +1167,20 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
     lbl.alignment = Alignment(horizontal='left', vertical='center')
     lbl.border = b_med()
     ws.cell(row=tr, column=1).border = b_med()
-    for c in range(3, 12):
+    for c in range(3, 13):
         ws.cell(row=tr, column=c).border = b_med()
     ws.row_dimensions[tr].height = 20
 
     # Xóa nội dung dòng ngay sau Tổng khoản nếu là dòng trống/rác thừa
     tr_next = tr + 1
-    next_vals = [ws.cell(row=tr_next, column=c).value for c in range(1, 12)]
+    next_vals = [ws.cell(row=tr_next, column=c).value for c in range(1, 13)]
     if all(v is None or (isinstance(v, str) and not v.strip()) for v in next_vals):
         ws.delete_rows(tr_next, 1)
 
     # ── Format vùng data ─────────────────────────────────────────────────────
     for r in range(DS, tr):
         ws.row_dimensions[r].height = bbkk_h(ws, r)
-        for col in range(1, 12):
+        for col in range(1, 13):
             cl = ws.cell(row=r, column=col)
             ha, va = BBKK_A.get(col, ('left', 'center'))
             safe_set(cl, fill=NO_FILL, border=b_thin(),
@@ -1173,18 +1188,17 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
                      alignment=Alignment(horizontal=ha, vertical=va, wrap_text=col in BBKK_WRAP))
             if col in BBKK_NUM and cl.value is not None and cl.value != '':
                 cl.number_format = '#,##0'
-            if col == 7 and isinstance(cl.value, datetime.datetime):
+            if col == 8 and isinstance(cl.value, datetime.datetime):
                 cl.number_format = 'DD/MM/YYYY'
 
     # ── Cập nhật footer: ngày ký biên bản (dòng cuối) ────────────────────────
-    # Tìm dòng có "Ngày" trong phần cuối
+    # Tìm dòng có "Ngày" hoặc "ngày" trong phần cuối
     for r in range(tr+1, min(tr+15, ws.max_row+1)):
         v = ws.cell(row=r, column=1).value
-        if v and isinstance(v, str) and 'Ngày' in v:
-            import re as _re2
-            ws.cell(row=r, column=1).value = _re2.sub(
-                r'Ngày\s+\d+\s+tháng\s+\d+\s+năm\s+\d+',
-                f'Ngày {last_day} tháng {thang} năm {nam}',
+        if v and isinstance(v, str) and re.search(r'[Nn]gày', v):
+            ws.cell(row=r, column=1).value = re.sub(
+                r'[Nn]gày\s+\d+\s+tháng\s+\d+\s+năm\s+\d+',
+                lambda m: f'{"Ngày" if m.group(0)[0]=="N" else "ngày"} {last_day} tháng {thang} năm {nam}',
                 v
             )
             break
@@ -1246,15 +1260,21 @@ def update_xnt_dates(tmpl_bytes, thang, nam):
     ws = wb.active
     last_day = get_last_day(thang, nam)
     import re as _re
-    for r in range(1, min(15, ws.max_row+1)):
-        for c in range(1, ws.max_column+1):
+
+    def _replace_dates(v):
+        # Thay "Tháng X năm YYYY"
+        v = _re.sub(r'Tháng\s+\d+\s+năm\s+\d+', f'Tháng {thang} năm {nam}', v)
+        # Thay "ngày X tháng Y năm Z" (chữ n thường hoặc N hoa)
+        v = _re.sub(r'[Nn]gày\s+\d+\s+tháng\s+\d+\s+năm\s+\d+',
+                    lambda m: f'{"Ngày" if m.group(0)[0]=="N" else "ngày"} {last_day} tháng {thang} năm {nam}', v)
+        return v
+
+    # Quét toàn bộ sheet (header + footer đều cần cập nhật)
+    for r in range(1, ws.max_row + 1):
+        for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
             if not v or not isinstance(v, str): continue
-            # Thay "Tháng X năm YYYY"
-            new_v = _re.sub(r'Tháng\s+\d+\s+năm\s+\d+', f'Tháng {thang} năm {nam}', v)
-            # Thay ngày cuối tháng
-            new_v = _re.sub(r'ngày\s+\d+\s+tháng\s+\d+\s+năm\s+\d+',
-                            f'ngày {last_day} tháng {thang} năm {nam}', new_v)
+            new_v = _replace_dates(v)
             if new_v != v:
                 ws.cell(row=r, column=c).value = new_v
     out = io.BytesIO(); wb.save(out); out.seek(0)
@@ -1267,13 +1287,18 @@ def update_bbkn_dates(tmpl_bytes, thang, nam):
     ws = wb.active
     last_day = get_last_day(thang, nam)
     import re as _re
-    for r in range(1, min(30, ws.max_row+1)):
-        for c in range(1, ws.max_column+1):
+
+    def _replace_dates(v):
+        v = _re.sub(r'Tháng\s+\d+\s+năm\s+\d+', f'Tháng {thang} năm {nam}', v)
+        v = _re.sub(r'[Nn]gày\s+\d+\s+tháng\s+\d+\s+năm\s+\d+',
+                    lambda m: f'{"Ngày" if m.group(0)[0]=="N" else "ngày"} {last_day} tháng {thang} năm {nam}', v)
+        return v
+
+    for r in range(1, ws.max_row + 1):
+        for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
             if not v or not isinstance(v, str): continue
-            new_v = _re.sub(r'Tháng\s+\d+\s+năm\s+\d+', f'Tháng {thang} năm {nam}', v)
-            new_v = _re.sub(r'ngày\s+\d+\s+tháng\s+\d+\s+năm\s+\d+',
-                            f'ngày {last_day} tháng {thang} năm {nam}', new_v)
+            new_v = _replace_dates(v)
             if new_v != v:
                 ws.cell(row=r, column=c).value = new_v
     out = io.BytesIO(); wb.save(out); out.seek(0)
