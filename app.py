@@ -113,8 +113,12 @@ def parse_companies(raw_df, qty_col):
     for _, row in raw_df.iterrows():
         v0 = row[0]
         if is_co_row(v0, row):
+            name_candidate = str(v0).strip()
+            # Bỏ qua dòng công ty trùng tên với công ty đang xử lý (tránh lặp header)
+            if name_candidate == cur:
+                continue
             if cur and rows: result.append((cur, rows))
-            cur, rows = str(v0).strip(), []
+            cur, rows = name_candidate, []
         elif is_drug_row(v0, row[2]):
             try:    qty = float(row[qty_col]) if not pd.isna(row[qty_col]) else 0
             except: qty = 0
@@ -969,21 +973,68 @@ def parse_bbkk_raw(raw_df):
     Columns in raw: 0=STT, 1=TenThuoc, 2=NongDo, 3=DVT, 4=DonGia,
                     5=SoLo, 6=HangSX, 7=HanDung, 8=SLSoSach, 9=ThanhTien, 10=SLThucTe
     Lọc dòng SL Thực tế = 0 (col 10); nếu col10 NaN dùng col8.
+    Tự động phát hiện dòng bị lệch cột (vd: Ramipril có dòng phụ "Tân giao...").
     Trả về list of row (pandas Series)
     """
     drugs, skipped = [], 0
+
+    # Xác định số cột tối đa của raw_df
+    max_col = max(raw_df.columns) if len(raw_df.columns) else 10
+
+    def _try_parse_row(row):
+        """
+        Cố gắng đọc 1 dòng có STT hợp lệ.
+        Trả về row đã chuẩn hoá (hoặc None nếu bỏ qua).
+        Logic: cột 1 phải là tên thuốc (string). Nếu col1 là số/NaN thì thử dịch phải.
+        """
+        # Kiểm tra col 1 là tên thuốc bình thường
+        v1 = row.get(1, float('nan')) if hasattr(row, 'get') else (row[1] if 1 in row.index else float('nan'))
+        if not pd.isna(v1) and isinstance(v1, str) and v1.strip() and not v1.strip().replace('.','',1).isdigit():
+            return row  # dòng bình thường
+
+        # col1 bị lệch → tìm cột string đầu tiên trong phạm vi [1..4]
+        for shift in range(1, 5):
+            cidx = 1 + shift
+            if cidx > max_col:
+                break
+            vc = row[cidx] if cidx in row.index else float('nan')
+            if not pd.isna(vc) and isinstance(vc, str) and vc.strip() and not vc.strip().replace('.','',1).isdigit():
+                # Dịch toàn bộ cột sang trái 'shift' bước, giữ nguyên col 0
+                new_vals = {0: row[0]}
+                for c in range(1, max_col + 1):
+                    src = c + shift
+                    new_vals[c] = row[src] if src in row.index else float('nan')
+                return pd.Series(new_vals)
+        return None  # không tìm được → bỏ qua
+
     for _, row in raw_df.iterrows():
-        try: int(str(row[0]).strip())
-        except: continue
-        if pd.isna(row[1]) or not isinstance(row[1], str): continue
+        try:
+            int(str(row[0]).strip())
+        except:
+            continue
+
+        fixed_row = _try_parse_row(row)
+        if fixed_row is None:
+            skipped += 1
+            continue
+
+        v1 = fixed_row[1] if 1 in fixed_row.index else float('nan')
+        if pd.isna(v1) or not isinstance(v1, str):
+            skipped += 1
+            continue
+
         # Số lượng thực tế: col 10 nếu có, else col 8
-        sl_tt = row[10] if not pd.isna(row.get(10, float('nan'))) else (row[8] if not pd.isna(row[8]) else 0)
-        try: sl_tt = float(sl_tt)
-        except: sl_tt = 0
+        col10 = fixed_row[10] if 10 in fixed_row.index else float('nan')
+        col8  = fixed_row[8]  if 8  in fixed_row.index else float('nan')
+        sl_tt = col10 if not pd.isna(col10) else (col8 if not pd.isna(col8) else 0)
+        try:
+            sl_tt = float(sl_tt)
+        except:
+            sl_tt = 0
         if sl_tt == 0:
             skipped += 1
             continue
-        drugs.append(row)
+        drugs.append(fixed_row)
     return drugs, {'drugs': len(drugs), 'skipped': skipped}
 
 def build_bbkk(tmpl_bytes, drugs, thang, nam):
@@ -1105,6 +1156,12 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
         ws.cell(row=tr, column=c).border = b_med()
     ws.row_dimensions[tr].height = 20
 
+    # Xóa nội dung dòng ngay sau Tổng khoản nếu là dòng trống/rác thừa
+    tr_next = tr + 1
+    next_vals = [ws.cell(row=tr_next, column=c).value for c in range(1, 12)]
+    if all(v is None or (isinstance(v, str) and not v.strip()) for v in next_vals):
+        ws.delete_rows(tr_next, 1)
+
     # ── Format vùng data ─────────────────────────────────────────────────────
     for r in range(DS, tr):
         ws.row_dimensions[r].height = bbkk_h(ws, r)
@@ -1210,7 +1267,7 @@ def update_bbkn_dates(tmpl_bytes, thang, nam):
     ws = wb.active
     last_day = get_last_day(thang, nam)
     import re as _re
-    for r in range(1, min(20, ws.max_row+1)):
+    for r in range(1, min(30, ws.max_row+1)):
         for c in range(1, ws.max_column+1):
             v = ws.cell(row=r, column=c).value
             if not v or not isinstance(v, str): continue
