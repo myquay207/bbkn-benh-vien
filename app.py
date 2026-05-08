@@ -184,18 +184,24 @@ def bbkn_h(ws, r):
 def build_bbkn(tmpl_bytes, companies):
     wb = load_workbook(io.BytesIO(tmpl_bytes))
     ws = wb.active
-    cs = {c: gs(ws,15,c) for c in range(1,13)}
-    ds = {c: gs(ws,16,c) for c in range(1,13)}
-    tks = gs(ws,213,11)
+
+    # Xóa row 14 thừa (dòng trắng giữa header và data) TRƯỚC khi làm bất cứ điều gì khác
+    # để DS và tất cả row numbers dưới đây đều đúng
+    ws.delete_rows(14, 1)
+
+    # Sau khi xóa row 14: row 15 cũ → row 14, row 16 cũ → row 15, ...
+    cs = {c: gs(ws,14,c) for c in range(1,13)}   # style từ dòng công ty (row 14 mới)
+    ds = {c: gs(ws,15,c) for c in range(1,13)}   # style từ dòng data (row 15 mới)
+    tks = gs(ws,212,11)                            # style tổng cộng (row 213 cũ → 212)
 
     fs = None
     for row in ws.iter_rows():
         for cell in row:
             if cell.value == 'HỘI ĐỒNG KIỂM NHẬP': fs = cell.row; break
         if fs: break
-    if not fs: fs = 215
+    if not fs: fs = 214
 
-    DS = 15
+    DS = 14
     need = sum(1+len(d) for _,d in companies)+1
     ins = (DS+need-1) - fs + 1
     if ins > 0: ws.insert_rows(fs, ins); fs += ins
@@ -208,7 +214,7 @@ def build_bbkn(tmpl_bytes, companies):
             try: ws.cell(row=r,column=c).value = None
             except: pass
 
-    # Xóa tên công ty thừa trong phần header (rows 13-14) nếu template có sẵn
+    # Xóa tên công ty thừa trong phần header (row 13) nếu template có sẵn
     for r in range(13, DS):
         v0 = ws.cell(row=r, column=1).value
         if v0 and isinstance(v0, str):
@@ -303,8 +309,6 @@ def build_bbkn(tmpl_bytes, companies):
                  border=b_med(),
                  alignment=Alignment(horizontal='center', vertical='center', wrap_text=True))
     ws.row_dimensions[13].height = 42
-    # Xóa row 14 thừa (dòng trắng giữa tiêu đề và dữ liệu)
-    ws.delete_rows(14, 1)
 
     for r in range(DS,tr+1):
         av=ws.cell(row=r,column=1).value; cv=ws.cell(row=r,column=3).value
@@ -1159,7 +1163,10 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
         fs = DS + 185  # fallback
 
     # Xóa dữ liệu cũ từ DS đến fs (bao gồm cả dòng Tổng khoản cuối cùng)
-    for m in [str(mr) for mr in ws.merged_cells.ranges if DS <= mr.min_row <= fs]:
+    # Unmerge TOÀN BỘ sheet từ DS trở xuống để tránh MergedCell khi insert rows
+    # (đặc biệt dòng chữ ký có merge cells sẽ xung đột nếu data insert vào đúng dòng đó)
+    all_merges = [str(mr) for mr in ws.merged_cells.ranges if mr.min_row >= DS]
+    for m in all_merges:
         try: ws.unmerge_cells(m)
         except: pass
     for r in range(DS, fs + 1):
