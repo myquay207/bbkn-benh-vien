@@ -201,7 +201,8 @@ def build_bbkn(tmpl_bytes, companies):
     if ins > 0: ws.insert_rows(fs, ins); fs += ins
 
     for m in [str(mr) for mr in ws.merged_cells.ranges if DS <= mr.min_row < fs]:
-        ws.merged_cells.remove(m)
+        try: ws.unmerge_cells(m)
+        except: pass
     for r in range(DS, fs):
         for c in range(1,13):
             try: ws.cell(row=r,column=c).value = None
@@ -286,7 +287,7 @@ def build_bbkn(tmpl_bytes, companies):
     to_remove_bbkn = [str(mr) for mr in ws.merged_cells.ranges
                       if mr.min_row <= 14 and mr.max_row >= 13]
     for m in to_remove_bbkn:
-        try: ws.merged_cells.remove(m)
+        try: ws.unmerge_cells(m)
         except: pass
 
     bbkn_headers = {
@@ -387,7 +388,8 @@ def build_xnt(tmpl_bytes, companies):
     if ins>0: ws.insert_rows(fs,ins); fs+=ins
 
     for m in [str(mr) for mr in ws.merged_cells.ranges if DS<=mr.min_row<fs]:
-        ws.merged_cells.remove(m)
+        try: ws.unmerge_cells(m)
+        except: pass
     for r in range(DS,fs):
         for c in range(1,15):
             try: ws.cell(row=r,column=c).value=None
@@ -1103,7 +1105,7 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
     to_remove_hdr = [str(mr) for mr in ws.merged_cells.ranges
                      if mr.min_row <= 12 and mr.max_row >= 11]
     for m in to_remove_hdr:
-        try: ws.merged_cells.remove(m)
+        try: ws.unmerge_cells(m)
         except: pass
 
     # Row 11: tiêu đề chính
@@ -1165,7 +1167,8 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
 
     # Xóa dữ liệu cũ từ DS đến fs (bao gồm cả dòng Tổng khoản cuối cùng)
     for m in [str(mr) for mr in ws.merged_cells.ranges if DS <= mr.min_row <= fs]:
-        ws.merged_cells.remove(m)
+        try: ws.unmerge_cells(m)
+        except: pass
     for r in range(DS, fs + 1):
         for c in range(1, 13):
             try: ws.cell(row=r, column=c).value = None
