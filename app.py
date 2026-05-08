@@ -281,25 +281,36 @@ def build_bbkn(tmpl_bytes, companies):
     ck.number_format='#,##0'; ck.border=b_med()
     ws.row_dimensions[tr].height=22
 
-    # Ghi lại tiêu đề cột BBKN (rows 13-14) đúng thứ tự, không thêm "Tên thuốc" thừa
+    # Ghi lại tiêu đề cột BBKN (rows 13-14) đúng thứ tự
+    # Unmerge rows 13-14 trước để tránh lỗi MergedCell read-only
+    to_remove_bbkn = [str(mr) for mr in ws.merged_cells.ranges
+                      if mr.min_row <= 14 and mr.max_row >= 13]
+    for m in to_remove_bbkn:
+        try: ws.merged_cells.remove(m)
+        except: pass
+
     bbkn_headers = {
         1: 'STT', 2: 'Số chứng từ', 3: 'Tên thuốc', 4: 'Nồng độ\nhàm lượng',
         5: 'Đơn vị tính', 6: 'Số lô', 7: 'Hãng, nước\nsản xuất',
-        8: 'Hạn dùng', 9: 'Đơn giá', 10: 'Số lượng', 11: 'Thành tiền', 12: 'Ghi chú'
+        8: 'Hạn dùng', 9: 'Đơn giá', 10: 'Số lượng', 11: 'Thành tiền', 12: ''
     }
     for col, hdr in bbkn_headers.items():
-        cl = ws.cell(row=13, column=col, value=hdr)
+        cl = ws.cell(row=13, column=col)
+        cl.value = hdr
         safe_set(cl, fill=NO_FILL,
                  font=Font(name='Times New Roman', bold=True, size=12),
                  border=b_med(),
                  alignment=Alignment(horizontal='center', vertical='center', wrap_text=True))
     for col in range(1, 13):
-        for r in (13,14):
-            safe_set(ws.cell(row=r,column=col),fill=NO_FILL,
-                     font=Font(name='Times New Roman',bold=True,size=12),
+        for r in (13, 14):
+            cl = ws.cell(row=r, column=col)
+            if r == 14:
+                cl.value = None
+            safe_set(cl, fill=NO_FILL,
+                     font=Font(name='Times New Roman', bold=True, size=12),
                      border=b_med(),
-                     alignment=Alignment(horizontal='center',vertical='center',wrap_text=True))
-    ws.row_dimensions[13].height=42; ws.row_dimensions[14].height=18
+                     alignment=Alignment(horizontal='center', vertical='center', wrap_text=True))
+    ws.row_dimensions[13].height = 42; ws.row_dimensions[14].height = 18
 
     for r in range(DS,tr+1):
         av=ws.cell(row=r,column=1).value; cv=ws.cell(row=r,column=3).value
@@ -1088,25 +1099,33 @@ def build_bbkk(tmpl_bytes, drugs, thang, nam):
     ws.cell(row=10, column=1).value = new_r10
 
     # ── Ghi lại tiêu đề cột BBKK (rows 11-12) để đảm bảo đúng thứ tự ──────────
-    # Row 11: tiêu đề chính; Row 12: tiêu đề phụ nếu cần
+    # Trước tiên unmerge tất cả merged cells ở rows 11-12 để tránh lỗi MergedCell read-only
+    to_remove_hdr = [str(mr) for mr in ws.merged_cells.ranges
+                     if mr.min_row <= 12 and mr.max_row >= 11]
+    for m in to_remove_hdr:
+        try: ws.merged_cells.remove(m)
+        except: pass
+
+    # Row 11: tiêu đề chính
     bbkk_headers = {
         1: 'STT', 2: 'Tên thuốc - Nồng độ - Hàm lượng', 3: '',
         4: 'Đơn vị tính', 5: 'Đơn giá', 6: 'Số lô',
         7: 'Hãng sản xuất', 8: 'Hạn dùng',
-        9: 'Số lượng\nSổ sách', 10: 'Thực tế', 11: 'Hỏng', 12: 'Ghi chú'
+        9: 'Số lượng', 10: '', 11: 'Hỏng', 12: 'Ghi chú'
     }
     for col, hdr in bbkk_headers.items():
-        cl = ws.cell(row=11, column=col, value=hdr)
+        cl = ws.cell(row=11, column=col)
+        cl.value = hdr
         safe_set(cl, fill=NO_FILL,
                  font=Font(name='Times New Roman', bold=True, size=11),
                  border=b_med(),
                  alignment=Alignment(horizontal='center', vertical='center', wrap_text=True))
     ws.row_dimensions[11].height = 30
-    # Row 12: merge indicator / blank (giữ nguyên style, xóa text thừa)
+    # Row 12: sub-header "Sổ sách"/"Thực tế" cho cột SL, còn lại blank
+    bbkk_sub = {9: 'Sổ sách', 10: 'Thực tế'}
     for col in range(1, 13):
         cl = ws.cell(row=12, column=col)
-        if col not in (9, 10):  # 9+10 có thể có sub-header "Sổ sách/Thực tế"
-            cl.value = None
+        cl.value = bbkk_sub.get(col, None)
         safe_set(cl, fill=NO_FILL,
                  font=Font(name='Times New Roman', bold=True, size=11),
                  border=b_med(),
