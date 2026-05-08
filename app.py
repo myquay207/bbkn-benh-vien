@@ -293,7 +293,7 @@ def build_bbkn(tmpl_bytes, companies):
     bbkn_headers = {
         1: 'STT', 2: 'Số chứng từ', 3: 'Tên thuốc', 4: 'Nồng độ\nhàm lượng',
         5: 'Đơn vị tính', 6: 'Số lô', 7: 'Hãng, nước\nsản xuất',
-        8: 'Hạn dùng', 9: 'Đơn giá', 10: 'Số lượng', 11: 'Thành tiền', 12: ''
+        8: 'Hạn dùng', 9: 'Đơn giá', 10: 'Số lượng', 11: 'Thành tiền', 12: 'Ghi chú'
     }
     for col, hdr in bbkn_headers.items():
         cl = ws.cell(row=13, column=col)
@@ -302,16 +302,9 @@ def build_bbkn(tmpl_bytes, companies):
                  font=Font(name='Times New Roman', bold=True, size=12),
                  border=b_med(),
                  alignment=Alignment(horizontal='center', vertical='center', wrap_text=True))
-    for col in range(1, 13):
-        for r in (13, 14):
-            cl = ws.cell(row=r, column=col)
-            if r == 14:
-                cl.value = None
-            safe_set(cl, fill=NO_FILL,
-                     font=Font(name='Times New Roman', bold=True, size=12),
-                     border=b_med(),
-                     alignment=Alignment(horizontal='center', vertical='center', wrap_text=True))
-    ws.row_dimensions[13].height = 42; ws.row_dimensions[14].height = 18
+    ws.row_dimensions[13].height = 42
+    # Xóa row 14 thừa (dòng trắng giữa tiêu đề và dữ liệu)
+    ws.delete_rows(14, 1)
 
     for r in range(DS,tr+1):
         av=ws.cell(row=r,column=1).value; cv=ws.cell(row=r,column=3).value
@@ -340,7 +333,7 @@ def build_bbkn(tmpl_bytes, companies):
     ws.sheet_properties.pageSetUpPr.fitToPage=True
     for a,v in [('left',.4),('right',.4),('top',.5),('bottom',.5),('header',.2),('footer',.2)]:
         setattr(ws.page_margins,a,v)
-    ws.print_title_rows='1:14'; ws.freeze_panes=ws.cell(row=DS,column=1)
+    ws.print_title_rows='1:13'; ws.freeze_panes=ws.cell(row=DS,column=1)
 
     out=io.BytesIO(); wb.save(out); out.seek(0); return out.getvalue(), debug_rows
 
